@@ -17,7 +17,7 @@ export default function StockPage() {
   async function load() {
     const bid = profile.business_id
     const [dRes, pRes, lRes] = await Promise.all([
-      supabase.from('stock_dispatches').select('*, products(name), businesses(name)').eq('merchant_id', bid).order('dispatched_at', { ascending: false }),
+      supabase.from('stock_dispatches').select('*, products(name), businesses!stock_dispatches_logistics_id_fkey(name)').eq('merchant_id', bid).order('dispatched_at', { ascending: false }),
       supabase.from('products').select('id, name').eq('merchant_id', bid).eq('is_active', true),
       supabase.from('merchant_logistics_links').select('logistics_id, businesses!merchant_logistics_links_logistics_id_fkey(id, name)').eq('merchant_id', bid).eq('is_active', true),
     ])
