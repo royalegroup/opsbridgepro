@@ -28,7 +28,7 @@ export function AuthProvider({ children }) {
     try {
       const { data, error } = await supabase
         .from('users')
-        .select('*, businesses(*)')
+        .select('*, businesses!users_business_id_fkey(*)')
         .eq('auth_id', authId)
         .maybeSingle()
 
