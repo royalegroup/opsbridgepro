@@ -25,14 +25,20 @@ export function AuthProvider({ children }) {
   }, [])
 
   async function fetchProfile(authId) {
-    const { data, error } = await supabase
-      .from('users')
-      .select('*, businesses(*)')
-      .eq('auth_id', authId)
-      .single()
+    try {
+      const { data, error } = await supabase
+        .from('users')
+        .select('*, businesses(*)')
+        .eq('auth_id', authId)
+        .maybeSingle()
 
-    if (data) setProfile(data)
-    setLoading(false)
+      console.log('fetchProfile result:', { data, error, authId })
+      if (data) setProfile(data)
+    } catch (err) {
+      console.error('fetchProfile error:', err)
+    } finally {
+      setLoading(false)
+    }
   }
 
   async function signIn(email, password) {

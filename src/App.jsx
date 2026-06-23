@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
+import { supabase } from './lib/supabase'
 import LoginPage from './pages/auth/LoginPage'
 import Sidebar from './components/shared/Sidebar'
 
@@ -72,12 +73,17 @@ function AppContent() {
         <div className="card max-w-sm w-full text-center">
           <p className="text-3xl mb-3">⚠</p>
           <h2 className="font-bold text-ink-900 mb-2">Account not set up</h2>
-          <p className="text-sm text-ink-500">Your account hasn't been linked to a business yet. Contact your administrator.</p>
+          <p className="text-sm text-ink-500 mb-5">Your account hasn't been linked to a business yet. Contact your administrator.</p>
+          <button
+            onClick={() => supabase.auth.signOut()}
+            className="btn-secondary w-full"
+          >
+            ← Sign out and try again
+          </button>
         </div>
       </div>
     )
   }
-
   const businessType = profile.business_type
   const pages = businessType === 'merchant' ? MERCHANT_PAGES : LOGISTICS_PAGES
   const PageComponent = pages[activePage] || pages['dashboard']
