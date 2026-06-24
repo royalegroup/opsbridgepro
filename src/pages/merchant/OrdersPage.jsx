@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../contexts/AuthContext'
 import Badge from '../../components/shared/Badge'
+import { createFollowUpTask } from '../../lib/taskHelpers'
 
 const STATUSES = ['all', 'new', 'assigned', 'confirmed', 'sent_to_logistics', 'in_transit', 'delivered', 'failed', 'cancelled']
 const NIGERIAN_STATES = ['Abia','Adamawa','Akwa Ibom','Anambra','Bauchi','Bayelsa','Benue','Borno','Cross River','Delta','Ebonyi','Edo','Ekiti','Enugu','FCT','Gombe','Imo','Jigawa','Kaduna','Kano','Katsina','Kebbi','Kogi','Kwara','Lagos','Nasarawa','Niger','Ogun','Ondo','Osun','Oyo','Plateau','Rivers','Sokoto','Taraba','Yobe','Zamfara']
@@ -73,25 +74,30 @@ export default function OrdersPage() {
   }
 
   async function updateStatus(orderId, status) {
-    await supabase.from('orders').update({ status }).eq('id', orderId)
-    // If confirmed, auto-create logistics request
-    if (status === 'confirmed') {
-      const order = orders.find(o => o.id === orderId)
-      const link = await supabase.from('merchant_logistics_links').select('logistics_id').eq('merchant_id', profile.business_id).eq('is_active', true).single()
-      if (link.data) {
-        await supabase.from('logistics_requests').insert({
-          order_id: orderId,
-          merchant_id: profile.business_id,
-          logistics_id: link.data.logistics_id,
-          delivery_state: order?.delivery_state,
-          status: 'pending'
-        })
-        await supabase.from('orders').update({ status: 'sent_to_logistics' }).eq('id', orderId)
-      }
+  await supabase.from('orders').update({ status }).eq('id', orderId)
+
+  const order = orders.find(o => o.id === orderId)
+
+  if (status === 'confirmed') {
+    const link = await supabase.from('merchant_logistics_links').select('logistics_id').eq('merchant_id', profile.business_id).eq('is_active', true).single()
+    if (link.data) {
+      await supabase.from('logistics_requests').insert({
+        order_id: orderId,
+        merchant_id: profile.business_id,
+        logistics_id: link.data.logistics_id,
+        delivery_state: order?.delivery_state,
+        status: 'pending'
+      })
+      await supabase.from('orders').update({ status: 'sent_to_logistics' }).eq('id', orderId)
     }
-    loadAll()
   }
 
+  if ((status === 'delivered' || status === 'failed') && order) {
+    await createFollowUpTask(order, status, profile.business_id)
+  }
+
+  loadAll()
+}
   async function assignRep(orderId, repId) {
     await supabase.from('orders').update({ assigned_cs_rep: repId, status: 'assigned' }).eq('id', orderId)
     loadAll()

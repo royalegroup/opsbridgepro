@@ -4,6 +4,7 @@ import { useAuth } from '../../contexts/AuthContext'
 const MERCHANT_NAV = [
   { label: 'Dashboard', icon: '◈', page: 'dashboard' },
   { label: 'Orders', icon: '◎', page: 'orders' },
+  { label: 'Tasks', icon: '✓', page: 'tasks' },
   { label: 'Customers', icon: '◉', page: 'customers' },
   { label: 'Products', icon: '▣', page: 'products' },
   { label: 'Stock', icon: '⬡', page: 'stock' },

@@ -12,6 +12,7 @@ import ProductsPage from './pages/merchant/ProductsPage'
 import StockPage from './pages/merchant/StockPage'
 import FinancePage from './pages/merchant/FinancePage'
 import ReportsPage from './pages/merchant/ReportsPage'
+import TasksPage from './pages/merchant/TasksPage'
 
 // Logistics pages
 import LogisticsDashboard from './pages/logistics/LogisticsDashboard'
@@ -33,6 +34,7 @@ const MERCHANT_PAGES = {
   stock: StockPage,
   finance: FinancePage,
   reports: ReportsPage,
+  tasks: TasksPage,
 }
 
 const LOGISTICS_PAGES = {
