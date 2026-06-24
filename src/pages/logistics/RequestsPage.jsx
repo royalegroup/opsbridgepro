@@ -2,19 +2,24 @@ import { useEffect, useState } from 'react'
 import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../contexts/AuthContext'
 import Badge from '../../components/shared/Badge'
+import { deductAgentStockOnDelivery } from '../../lib/stockHelpers'
 
 export default function RequestsPage() {
   const { profile } = useAuth()
   const [requests, setRequests] = useState([])
   const [agents, setAgents] = useState([])
   const [filter, setFilter] = useState('all')
+  const [failReason, setFailReason] = useState({})
 
   useEffect(() => { if (profile?.business_id) load() }, [profile])
 
   async function load() {
     const bid = profile.business_id
     const [rRes, aRes] = await Promise.all([
-      supabase.from('logistics_requests').select('*, businesses!logistics_requests_merchant_id_fkey(name), agents(users(full_name)), orders(delivery_state, customers(full_name, phone, address))').eq('logistics_id', bid).order('created_at', { ascending: false }),
+      supabase.from('logistics_requests')
+        .select('*, businesses!logistics_requests_merchant_id_fkey(name), agents(id, users(full_name)), orders(id, delivery_state, customers(full_name, phone, address))')
+        .eq('logistics_id', bid)
+        .order('created_at', { ascending: false }),
       supabase.from('agents').select('id, states_covered, users(full_name)').eq('logistics_id', bid).eq('is_active', true),
     ])
     if (rRes.data) setRequests(rRes.data)
@@ -22,7 +27,9 @@ export default function RequestsPage() {
   }
 
   async function assignAgent(requestId, agentId) {
-    await supabase.from('logistics_requests').update({ assigned_agent: agentId, status: 'assigned', assigned_at: new Date().toISOString() }).eq('id', requestId)
+    await supabase.from('logistics_requests')
+      .update({ assigned_agent: agentId, status: 'assigned', assigned_at: new Date().toISOString() })
+      .eq('id', requestId)
     load()
   }
 
@@ -30,13 +37,22 @@ export default function RequestsPage() {
     const update = { status }
     if (reason) update.failure_reason = reason
     if (status === 'delivered') update.delivered_at = new Date().toISOString()
+
     await supabase.from('logistics_requests').update(update).eq('id', requestId)
-    // Update parent order
+
+    const req = requests.find(r => r.id === requestId)
+
+    // Update parent order status
     const orderStatus = { out_for_delivery: 'in_transit', delivered: 'delivered', failed: 'failed' }[status]
-    if (orderStatus) {
-      const req = requests.find(r => r.id === requestId)
-      if (req?.order_id) await supabase.from('orders').update({ status: orderStatus }).eq('id', req.order_id)
+    if (orderStatus && req?.orders?.id) {
+      await supabase.from('orders').update({ status: orderStatus }).eq('id', req.orders.id)
     }
+
+    // Deduct agent stock on delivery
+    if (status === 'delivered' && req?.orders?.id && req?.agents?.id) {
+      await deductAgentStockOnDelivery(req.orders.id, req.agents.id)
+    }
+
     load()
   }
 
@@ -64,7 +80,10 @@ export default function RequestsPage() {
 
       <div className="card p-0 overflow-hidden">
         {filtered.length === 0 ? (
-          <div className="p-12 text-center"><p className="text-3xl mb-2">◎</p><p className="text-ink-500 font-medium">No requests found</p></div>
+          <div className="p-12 text-center">
+            <p className="text-3xl mb-2">◎</p>
+            <p className="text-ink-500 font-medium">No requests found</p>
+          </div>
         ) : (
           <div className="divide-y divide-surface-100">
             {filtered.map(r => (
@@ -82,29 +101,56 @@ export default function RequestsPage() {
                   <p className="text-xs text-ink-400 flex-shrink-0">{new Date(r.created_at).toLocaleDateString('en-NG')}</p>
                 </div>
 
-                {r.agents && <p className="text-xs text-ink-500">Agent: <span className="font-medium">{r.agents?.users?.full_name}</span></p>}
+                {r.agents && (
+                  <p className="text-xs text-ink-500">Agent: <span className="font-medium">{r.agents?.users?.full_name}</span></p>
+                )}
 
                 {r.status === 'pending' && (
-                  <div className="flex gap-2 flex-wrap">
-                    <select onChange={e => assignAgent(r.id, e.target.value)} defaultValue=""
-                      className="text-xs px-2 py-1.5 rounded-lg border border-surface-300 bg-white text-ink-700 flex-1 min-w-0">
-                      <option value="" disabled>Assign agent for {r.orders?.delivery_state}</option>
-                      {agents.filter(a => !r.orders?.delivery_state || a.states_covered?.includes(r.orders.delivery_state)).map(a => (
+                  <select
+                    onChange={e => assignAgent(r.id, e.target.value)}
+                    defaultValue=""
+                    className="text-xs px-2 py-1.5 rounded-lg border border-surface-300 bg-white text-ink-700 w-full">
+                    <option value="" disabled>Assign agent for {r.orders?.delivery_state}</option>
+                    {agents
+                      .filter(a => !r.orders?.delivery_state || a.states_covered?.includes(r.orders.delivery_state))
+                      .map(a => (
                         <option key={a.id} value={a.id}>{a.users?.full_name} ({a.states_covered?.join(', ')})</option>
-                      ))}
-                    </select>
-                  </div>
+                      ))
+                    }
+                  </select>
                 )}
+
                 {r.status === 'assigned' && (
-                  <button onClick={() => updateStatus(r.id, 'out_for_delivery')} className="text-xs px-3 py-1.5 rounded-lg bg-cyan-50 text-cyan-700 font-medium hover:bg-cyan-100">Mark Out for Delivery</button>
+                  <button onClick={() => updateStatus(r.id, 'out_for_delivery')}
+                    className="text-xs px-3 py-1.5 rounded-lg bg-cyan-50 text-cyan-700 font-medium hover:bg-cyan-100">
+                    Mark Out for Delivery
+                  </button>
                 )}
+
                 {r.status === 'out_for_delivery' && (
-                  <div className="flex gap-2">
-                    <button onClick={() => updateStatus(r.id, 'delivered')} className="text-xs px-3 py-1.5 rounded-lg bg-green-50 text-green-700 font-medium hover:bg-green-100">Mark Delivered ✓</button>
-                    <button onClick={() => updateStatus(r.id, 'failed', 'Customer unavailable')} className="text-xs px-3 py-1.5 rounded-lg bg-red-50 text-red-600 font-medium hover:bg-red-100">Mark Failed ✗</button>
+                  <div className="space-y-2">
+                    <div className="flex gap-2">
+                      <button onClick={() => updateStatus(r.id, 'delivered')}
+                        className="text-xs px-3 py-1.5 rounded-lg bg-green-50 text-green-700 font-medium hover:bg-green-100">
+                        Mark Delivered ✓
+                      </button>
+                      <button onClick={() => updateStatus(r.id, 'failed', failReason[r.id] || 'Customer unavailable')}
+                        className="text-xs px-3 py-1.5 rounded-lg bg-red-50 text-red-600 font-medium hover:bg-red-100">
+                        Mark Failed ✗
+                      </button>
+                    </div>
+                    <input
+                      className="input text-xs"
+                      placeholder="Failure reason (optional)"
+                      value={failReason[r.id] || ''}
+                      onChange={e => setFailReason(f => ({ ...f, [r.id]: e.target.value }))}
+                    />
                   </div>
                 )}
-                {r.failure_reason && <p className="text-xs text-red-500">Reason: {r.failure_reason}</p>}
+
+                {r.failure_reason && (
+                  <p className="text-xs text-red-500">Reason: {r.failure_reason}</p>
+                )}
               </div>
             ))}
           </div>

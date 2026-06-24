@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../contexts/AuthContext'
 import Badge from '../../components/shared/Badge'
+import { deductAgentStockOnDelivery } from '../../lib/stockHelpers'
 
 export default function AgentView() {
   const { profile, signOut } = useAuth()
@@ -15,7 +16,10 @@ export default function AgentView() {
   async function load() {
     const [aRes, dRes, sRes] = await Promise.all([
       supabase.from('agents').select('*').eq('user_id', profile.id).single(),
-      supabase.from('logistics_requests').select('*, orders(*, customers(full_name, phone, address))').eq('assigned_agent', profile.id).order('created_at', { ascending: false }),
+      supabase.from('logistics_requests')
+        .select('*, orders(*, customers(full_name, phone, address), order_items(product_id, quantity))')
+        .eq('assigned_agent', profile.id)
+        .order('created_at', { ascending: false }),
       supabase.from('agent_stock').select('*, products(name)').eq('agent_id', profile.id),
     ])
     if (aRes.data) setAgent(aRes.data)
@@ -24,12 +28,23 @@ export default function AgentView() {
   }
 
   async function updateDelivery(id, status) {
-    await supabase.from('logistics_requests').update({ status, ...(status === 'delivered' ? { delivered_at: new Date().toISOString() } : {}) }).eq('id', id)
+    await supabase.from('logistics_requests')
+      .update({ status, ...(status === 'delivered' ? { delivered_at: new Date().toISOString() } : {}) })
+      .eq('id', id)
+
+    const req = deliveries.find(d => d.id === id)
+
+    // Update parent order status
     const orderStatus = { out_for_delivery: 'in_transit', delivered: 'delivered', failed: 'failed' }[status]
-    if (orderStatus) {
-      const req = deliveries.find(d => d.id === id)
-      if (req?.order_id) await supabase.from('orders').update({ status: orderStatus }).eq('id', req.order_id)
+    if (orderStatus && req?.order_id) {
+      await supabase.from('orders').update({ status: orderStatus }).eq('id', req.order_id)
     }
+
+    // Deduct stock when delivered
+    if (status === 'delivered' && req?.order_id && agent?.id) {
+      await deductAgentStockOnDelivery(req.order_id, agent.id)
+    }
+
     load()
   }
 
@@ -63,7 +78,6 @@ export default function AgentView() {
           <button onClick={signOut} className="w-9 h-9 rounded-full bg-white/10 flex items-center justify-center text-white text-lg">⏻</button>
         </div>
 
-        {/* Quick stats */}
         <div className="grid grid-cols-3 gap-3 mt-5">
           <div className="bg-white/10 rounded-xl p-3 text-center">
             <p className="text-2xl font-bold">{active.length}</p>
@@ -158,6 +172,9 @@ export default function AgentView() {
             {lowStock.length > 0 && (
               <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 mb-4">
                 <p className="text-sm font-semibold text-amber-800">⚠ Low Stock — contact your manager</p>
+                {lowStock.map(s => (
+                  <p key={s.id} className="text-xs text-amber-700 mt-1">{s.products?.name}: {s.quantity} units remaining</p>
+                ))}
               </div>
             )}
             <div className="space-y-3">
