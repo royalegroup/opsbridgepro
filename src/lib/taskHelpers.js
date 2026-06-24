@@ -1,11 +1,19 @@
 import { supabase } from './supabase'
 
 export async function createFollowUpTask(order, status, merchantId) {
-  if (!order || !merchantId) return
+  console.log('createFollowUpTask called:', { order, status, merchantId })
+
+  if (!order || !merchantId) {
+    console.warn('Missing order or merchantId')
+    return
+  }
 
   const isDelivered = status === 'delivered'
   const isFailed = status === 'failed'
-  if (!isDelivered && !isFailed) return
+  if (!isDelivered && !isFailed) {
+    console.warn('Status not delivered or failed:', status)
+    return
+  }
 
   const customerName = order.customers?.full_name || 'Customer'
   const type = isDelivered ? 'follow_up_delivered' : 'follow_up_failed'
@@ -23,7 +31,7 @@ export async function createFollowUpTask(order, status, merchantId) {
 
   const priority = isFailed ? 'high' : 'normal'
 
-  await supabase.from('tasks').insert({
+  const payload = {
     merchant_id: merchantId,
     order_id: order.id,
     assigned_to: order.assigned_cs_rep || null,
@@ -33,5 +41,11 @@ export async function createFollowUpTask(order, status, merchantId) {
     status: 'pending',
     priority,
     due_date: dueDate.toISOString(),
-  })
+  }
+
+  console.log('Inserting task payload:', payload)
+
+  const { data, error } = await supabase.from('tasks').insert(payload).select()
+
+  console.log('Task insert result:', { data, error })
 }
