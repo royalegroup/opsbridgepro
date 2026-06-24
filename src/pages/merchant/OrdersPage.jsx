@@ -76,10 +76,20 @@ export default function OrdersPage() {
   async function updateStatus(orderId, status) {
   await supabase.from('orders').update({ status }).eq('id', orderId)
 
-  const order = orders.find(o => o.id === orderId)
+  // Fetch full order with customer data for task creation
+  const { data: order } = await supabase
+    .from('orders')
+    .select('*, customers(full_name, phone)')
+    .eq('id', orderId)
+    .single()
 
-  if (status === 'confirmed') {
-    const link = await supabase.from('merchant_logistics_links').select('logistics_id').eq('merchant_id', profile.business_id).eq('is_active', true).single()
+  if (status === 'confirmed' && order) {
+    const link = await supabase
+      .from('merchant_logistics_links')
+      .select('logistics_id')
+      .eq('merchant_id', profile.business_id)
+      .eq('is_active', true)
+      .single()
     if (link.data) {
       await supabase.from('logistics_requests').insert({
         order_id: orderId,
