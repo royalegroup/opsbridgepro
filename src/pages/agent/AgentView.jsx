@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../contexts/AuthContext'
 import Badge from '../../components/shared/Badge'
+import { createFollowUpTask } from '../../lib/taskHelpers'
 import { deductAgentStockOnDelivery } from '../../lib/stockHelpers'
 
 export default function AgentView() {
@@ -28,25 +29,36 @@ export default function AgentView() {
   }
 
   async function updateDelivery(id, status) {
-    await supabase.from('logistics_requests')
-      .update({ status, ...(status === 'delivered' ? { delivered_at: new Date().toISOString() } : {}) })
-      .eq('id', id)
+  await supabase.from('logistics_requests')
+    .update({ status, ...(status === 'delivered' ? { delivered_at: new Date().toISOString() } : {}) })
+    .eq('id', id)
 
-    const req = deliveries.find(d => d.id === id)
+  const req = deliveries.find(d => d.id === id)
 
-    // Update parent order status
-    const orderStatus = { out_for_delivery: 'in_transit', delivered: 'delivered', failed: 'failed' }[status]
-    if (orderStatus && req?.order_id) {
-      await supabase.from('orders').update({ status: orderStatus }).eq('id', req.order_id)
-    }
-
-    // Deduct stock when delivered
-    if (status === 'delivered' && req?.order_id && agent?.id) {
-      await deductAgentStockOnDelivery(req.order_id, agent.id)
-    }
-
-    load()
+  const orderStatus = { out_for_delivery: 'in_transit', delivered: 'delivered', failed: 'failed' }[status]
+  if (orderStatus && req?.order_id) {
+    await supabase.from('orders').update({ status: orderStatus }).eq('id', req.order_id)
   }
+
+  if (status === 'delivered' && req?.order_id && agent?.id) {
+    await deductAgentStockOnDelivery(req.order_id, agent.id)
+  }
+
+  // Auto-create follow-up task
+  if ((status === 'delivered' || status === 'failed') && req?.order_id) {
+    const { data: fullOrder } = await supabase
+      .from('orders')
+      .select('*, customers(full_name, phone)')
+      .eq('id', req.order_id)
+      .single()
+
+    if (fullOrder) {
+      await createFollowUpTask(fullOrder, status, fullOrder.merchant_id)
+    }
+  }
+
+  load()
+}
 
   async function remitCOD(requestId, amount) {
     await supabase.from('cod_remittances').insert({
