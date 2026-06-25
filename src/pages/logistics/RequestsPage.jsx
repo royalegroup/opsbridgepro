@@ -2,8 +2,9 @@ import { useEffect, useState } from 'react'
 import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../contexts/AuthContext'
 import Badge from '../../components/shared/Badge'
-import { createFollowUpTask } from '../../lib/taskHelpers'
 import { deductAgentStockOnDelivery } from '../../lib/stockHelpers'
+import { createFollowUpTask } from '../../lib/taskHelpers'
+import { createCODRecord } from '../../lib/codHelpers'
 
 export default function RequestsPage() {
   const { profile } = useAuth()
@@ -34,41 +35,58 @@ export default function RequestsPage() {
     load()
   }
 
- async function updateStatus(requestId, status, reason = null) {
-  const update = { status }
-  if (reason) update.failure_reason = reason
-  if (status === 'delivered') update.delivered_at = new Date().toISOString()
+  async function updateStatus(requestId, status, reason = null) {
+    const update = { status }
+    if (reason) update.failure_reason = reason
+    if (status === 'delivered') update.delivered_at = new Date().toISOString()
 
-  await supabase.from('logistics_requests').update(update).eq('id', requestId)
+    await supabase.from('logistics_requests').update(update).eq('id', requestId)
 
-  const req = requests.find(r => r.id === requestId)
+    const req = requests.find(r => r.id === requestId)
 
-  // Update parent order status
-  const orderStatus = { out_for_delivery: 'in_transit', delivered: 'delivered', failed: 'failed' }[status]
-  if (orderStatus && req?.orders?.id) {
-    await supabase.from('orders').update({ status: orderStatus }).eq('id', req.orders.id)
-  }
-
-  // Deduct agent stock on delivery
-  if (status === 'delivered' && req?.orders?.id && req?.agents?.id) {
-    await deductAgentStockOnDelivery(req.orders.id, req.agents.id)
-  }
-
-  // Auto-create follow-up task on delivered or failed
-  if ((status === 'delivered' || status === 'failed') && req?.orders?.id) {
-    const { data: fullOrder } = await supabase
-      .from('orders')
-      .select('*, customers(full_name, phone)')
-      .eq('id', req.orders.id)
-      .single()
-
-    if (fullOrder) {
-      await createFollowUpTask(fullOrder, status, fullOrder.merchant_id)
+    // Update parent order status
+    const orderStatus = { out_for_delivery: 'in_transit', delivered: 'delivered', failed: 'failed' }[status]
+    if (orderStatus && req?.orders?.id) {
+      await supabase.from('orders').update({ status: orderStatus }).eq('id', req.orders.id)
     }
-  }
 
-  load()
-}
+    // Deduct agent stock on delivery
+    if (status === 'delivered' && req?.orders?.id && req?.agents?.id) {
+      await deductAgentStockOnDelivery(req.orders.id, req.agents.id)
+    }
+
+    // Auto-create COD record on delivery
+    if (status === 'delivered' && req?.agents?.id) {
+      const { data: order } = await supabase
+        .from('orders')
+        .select('total_amount, merchant_id, assigned_cs_rep, customers(full_name)')
+        .eq('id', req.orders.id)
+        .single()
+      if (order) {
+        await createCODRecord(
+          requestId,
+          req.agents.id,
+          profile.business_id,
+          order.merchant_id,
+          order.total_amount
+        )
+      }
+    }
+
+    // Auto-create follow-up task on delivered or failed
+    if ((status === 'delivered' || status === 'failed') && req?.orders?.id) {
+      const { data: fullOrder } = await supabase
+        .from('orders')
+        .select('*, customers(full_name, phone)')
+        .eq('id', req.orders.id)
+        .single()
+      if (fullOrder) {
+        await createFollowUpTask(fullOrder, status, fullOrder.merchant_id)
+      }
+    }
+
+    load()
+  }
 
   const STATUSES = ['all', 'pending', 'assigned', 'out_for_delivery', 'delivered', 'failed']
   const filtered = filter === 'all' ? requests : requests.filter(r => r.status === filter)
