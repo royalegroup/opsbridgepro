@@ -13,6 +13,7 @@ import StockPage from './pages/merchant/StockPage'
 import FinancePage from './pages/merchant/FinancePage'
 import ReportsPage from './pages/merchant/ReportsPage'
 import TasksPage from './pages/merchant/TasksPage'
+import StaffPage from './pages/merchant/StaffPage'
 
 // Logistics pages
 import LogisticsDashboard from './pages/logistics/LogisticsDashboard'
@@ -35,6 +36,7 @@ const MERCHANT_PAGES = {
   finance: FinancePage,
   reports: ReportsPage,
   tasks: TasksPage,
+  staff: StaffPage,
 }
 
 const LOGISTICS_PAGES = {
@@ -68,7 +70,7 @@ function AppContent() {
   // Agent gets their own mobile-optimised view
   if (profile?.role === 'agent') return <AgentView />
 
-  // No profile yet (user exists in auth but not in users table)
+  // No profile linked — show error with sign out option
   if (!profile) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-surface-50 p-4">
@@ -86,6 +88,7 @@ function AppContent() {
       </div>
     )
   }
+
   const businessType = profile.business_type
   const pages = businessType === 'merchant' ? MERCHANT_PAGES : LOGISTICS_PAGES
   const PageComponent = pages[activePage] || pages['dashboard']

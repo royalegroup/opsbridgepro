@@ -32,8 +32,8 @@ export function AuthProvider({ children }) {
         .eq('auth_id', authId)
         .maybeSingle()
 
-      console.log('fetchProfile result:', { data, error, authId })
       if (data) setProfile(data)
+      else console.warn('No profile found for auth_id:', authId)
     } catch (err) {
       console.error('fetchProfile error:', err)
     } finally {
@@ -41,8 +41,28 @@ export function AuthProvider({ children }) {
     }
   }
 
-  async function signIn(email, password) {
-    const { data, error } = await supabase.auth.signInWithPassword({ email, password })
+  // Username login — looks up email from username then signs in
+  async function signInWithUsername(username, password) {
+    // Find user by username
+    const { data: user, error: lookupError } = await supabase
+      .from('users')
+      .select('email, auth_id, is_active')
+      .eq('username', username.toLowerCase().trim())
+      .maybeSingle()
+
+    if (lookupError || !user) {
+      return { error: { message: 'Username not found. Please check and try again.' } }
+    }
+
+    if (!user.is_active) {
+      return { error: { message: 'Your account has been deactivated. Contact your administrator.' } }
+    }
+
+    if (!user.auth_id) {
+      return { error: { message: 'Your account credentials have not been set up yet. Contact your manager.' } }
+    }
+
+    const { data, error } = await supabase.auth.signInWithPassword({ email: user.email, password })
     return { data, error }
   }
 
@@ -52,7 +72,7 @@ export function AuthProvider({ children }) {
   }
 
   return (
-    <AuthContext.Provider value={{ session, profile, loading, signIn, signOut, fetchProfile }}>
+    <AuthContext.Provider value={{ session, profile, loading, signInWithUsername, signOut, fetchProfile }}>
       {children}
     </AuthContext.Provider>
   )

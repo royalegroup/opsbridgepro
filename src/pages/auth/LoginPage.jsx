@@ -2,20 +2,39 @@ import { useState } from 'react'
 import { useAuth } from '../../contexts/AuthContext'
 
 export default function LoginPage() {
-  const { signIn } = useAuth()
-  const [email, setEmail] = useState('')
+  const { signInWithUsername } = useAuth()
+  const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
+  const [remember, setRemember] = useState(true)
+  const [showPassword, setShowPassword] = useState(false)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
   async function handleLogin() {
-    if (!email || !password) { setError('Enter your email and password.'); return }
+    if (!username || !password) { setError('Enter your username and password.'); return }
     setLoading(true); setError('')
-    const { error } = await signIn(email, password)
-    if (error) { setError(error.message); setLoading(false) }
+
+    // Store remember me preference
+    if (remember) {
+      localStorage.setItem('opsbridgepro_remember', username)
+    } else {
+      localStorage.removeItem('opsbridgepro_remember')
+    }
+
+    const { error } = await signInWithUsername(username, password)
+    if (error) {
+      setError(error.message)
+      setLoading(false)
+    }
   }
 
   function handleKey(e) { if (e.key === 'Enter') handleLogin() }
+
+  // Pre-fill username if remembered
+  useState(() => {
+    const saved = localStorage.getItem('opsbridgepro_remember')
+    if (saved) setUsername(saved)
+  })
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-brand-950 via-brand-900 to-brand-700 flex items-center justify-center p-4">
@@ -38,26 +57,48 @@ export default function LoginPage() {
 
           <div className="space-y-4">
             <div>
-              <label className="label text-brand-200">Email address</label>
+              <label className="label text-brand-200">Username</label>
               <input
-                type="email"
+                type="text"
+                autoComplete="username"
                 className="input bg-white/10 border-white/20 text-white placeholder:text-brand-300 focus:ring-white/40"
-                placeholder="you@example.com"
-                value={email}
-                onChange={e => setEmail(e.target.value)}
+                placeholder="your_username"
+                value={username}
+                onChange={e => setUsername(e.target.value)}
                 onKeyDown={handleKey}
               />
             </div>
+
             <div>
               <label className="label text-brand-200">Password</label>
-              <input
-                type="password"
-                className="input bg-white/10 border-white/20 text-white placeholder:text-brand-300 focus:ring-white/40"
-                placeholder="••••••••"
-                value={password}
-                onChange={e => setPassword(e.target.value)}
-                onKeyDown={handleKey}
-              />
+              <div className="relative">
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  autoComplete="current-password"
+                  className="input bg-white/10 border-white/20 text-white placeholder:text-brand-300 focus:ring-white/40 pr-10"
+                  placeholder="••••••••"
+                  value={password}
+                  onChange={e => setPassword(e.target.value)}
+                  onKeyDown={handleKey}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(s => !s)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-brand-300 hover:text-white transition-colors text-xs">
+                  {showPassword ? 'Hide' : 'Show'}
+                </button>
+              </div>
+            </div>
+
+            {/* Remember Me */}
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => setRemember(r => !r)}
+                className={`w-10 h-5 rounded-full transition-colors relative flex-shrink-0 ${remember ? 'bg-brand-400' : 'bg-white/20'}`}>
+                <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${remember ? 'translate-x-5' : 'translate-x-0.5'}`} />
+              </button>
+              <span className="text-brand-300 text-sm">Remember me</span>
             </div>
 
             {error && (
@@ -69,8 +110,7 @@ export default function LoginPage() {
             <button
               onClick={handleLogin}
               disabled={loading}
-              className="w-full py-3 rounded-xl bg-white text-brand-800 font-semibold text-sm hover:bg-brand-50 active:bg-brand-100 transition-colors disabled:opacity-60 mt-2"
-            >
+              className="w-full py-3 rounded-xl bg-white text-brand-800 font-semibold text-sm hover:bg-brand-50 active:bg-brand-100 transition-colors disabled:opacity-60 mt-2">
               {loading ? 'Signing in…' : 'Sign in'}
             </button>
           </div>
