@@ -2,23 +2,21 @@ import { useEffect, useState } from 'react'
 import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../contexts/AuthContext'
 
-const ROLES = [
-  { value: 'store_manager', label: 'Store Manager' },
-  { value: 'cs_rep', label: 'CS Rep' },
-  { value: 'finance_officer', label: 'Finance Officer' },
-]
-
 export default function StaffPage() {
   const { profile } = useAuth()
   const [staff, setStaff] = useState([])
   const [showForm, setShowForm] = useState(false)
   const [credModal, setCredModal] = useState(null)
-  const [form, setForm] = useState({ full_name: '', phone: '', email: '', role: 'cs_rep', username: '' })
+  const [pwModal, setPwModal] = useState(false)
+  const [form, setForm] = useState({ full_name: '', phone: '', email: '', role: '', username: '' })
   const [credForm, setCredForm] = useState({ username: '', password: '', confirmPassword: '' })
+  const [pwForm, setPwForm] = useState({ current: '', newPw: '', confirm: '' })
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [credError, setCredError] = useState('')
   const [credSuccess, setCredSuccess] = useState('')
+  const [pwError, setPwError] = useState('')
+  const [pwSuccess, setPwSuccess] = useState('')
 
   useEffect(() => { if (profile?.business_id) load() }, [profile])
 
@@ -32,38 +30,38 @@ export default function StaffPage() {
     if (data) setStaff(data)
   }
 
- async function save() {
-  if (!form.full_name || !form.role || !form.username) { setError('Name, role and username are required.'); return }
-  setSaving(true); setError('')
+  async function save() {
+    if (!form.full_name || !form.role || !form.username) { setError('Name, role and username are required.'); return }
+    setSaving(true); setError('')
 
-  // Check username uniqueness
-  const { data: existing } = await supabase.from('users').select('id').eq('username', form.username.toLowerCase()).maybeSingle()
-  if (existing) { setError('Username already taken. Choose another.'); setSaving(false); return }
+    // Check username uniqueness
+    const { data: existing } = await supabase.from('users').select('id').eq('username', form.username.toLowerCase()).maybeSingle()
+    if (existing) { setError('Username already taken. Choose another.'); setSaving(false); return }
 
-  const { data, error: insertError } = await supabase.from('users').insert({
-    full_name: form.full_name,
-    phone: form.phone,
-    email: form.email || `staff_${Date.now()}@opsbridgepro.internal`,
-    role: form.role,
-    username: form.username.toLowerCase(),
-    business_id: profile.business_id,
-    business_type: 'merchant',
-    is_active: true,
-  }).select()
+    // Check email uniqueness only if email provided
+    if (form.email) {
+      const { data: emailExists } = await supabase.from('users').select('id').eq('email', form.email.toLowerCase()).maybeSingle()
+      if (emailExists) { setError('Email already in use. Use a different email or leave it blank.'); setSaving(false); return }
+    }
 
-  console.log('Staff insert result:', { data, insertError })
+    const { error: insertError } = await supabase.from('users').insert({
+      full_name: form.full_name,
+      phone: form.phone || null,
+      email: form.email?.toLowerCase() || `staff_${Date.now()}_${Math.random().toString(36).slice(2)}@opsbridgepro.internal`,
+      role: form.role.toLowerCase().replace(/\s+/g, '_'),
+      username: form.username.toLowerCase().trim(),
+      business_id: profile.business_id,
+      business_type: 'merchant',
+      is_active: true,
+    })
 
-  if (insertError) {
-    setError(`Failed to add staff: ${insertError.message}`)
+    if (insertError) { setError(`Failed: ${insertError.message}`); setSaving(false); return }
+
+    setShowForm(false)
+    setForm({ full_name: '', phone: '', email: '', role: '', username: '' })
+    load()
     setSaving(false)
-    return
   }
-
-  setShowForm(false)
-  setForm({ full_name: '', phone: '', email: '', role: 'cs_rep', username: '' })
-  load()
-  setSaving(false)
-}
 
   async function setupCredentials() {
     if (!credForm.username || !credForm.password) { setCredError('Username and password are required.'); return }
@@ -72,39 +70,49 @@ export default function StaffPage() {
 
     setSaving(true); setCredError(''); setCredSuccess('')
 
-    // Check username uniqueness (excluding current user)
     const { data: existing } = await supabase
-      .from('users')
-      .select('id')
+      .from('users').select('id')
       .eq('username', credForm.username.toLowerCase())
       .neq('id', credModal.id)
       .maybeSingle()
 
     if (existing) { setCredError('Username already taken.'); setSaving(false); return }
 
-    // Create Supabase auth account
-    const email = credModal.email.includes('@opsbridgepro.internal')
-      ? `staff_${credModal.id.slice(0, 8)}@opsbridgepro.app`
+    const authEmail = credModal.email.includes('@opsbridgepro.internal')
+      ? `staff_${credModal.id.slice(0, 8)}_${Date.now()}@opsbridgepro.app`
       : credModal.email
 
     const { data: authData, error: authError } = await supabase.auth.signUp({
-      email,
+      email: authEmail,
       password: credForm.password,
       options: { data: { full_name: credModal.full_name } }
     })
 
     if (authError) { setCredError(authError.message); setSaving(false); return }
 
-    // Link auth to user record
     await supabase.from('users').update({
       auth_id: authData.user?.id,
-      email,
+      email: authEmail,
       username: credForm.username.toLowerCase(),
     }).eq('id', credModal.id)
 
-    setCredSuccess(`✅ Login credentials set! Username: ${credForm.username}`)
+    setCredSuccess(`✅ Login set! Username: ${credForm.username}`)
     setCredForm({ username: '', password: '', confirmPassword: '' })
     load()
+    setSaving(false)
+  }
+
+  async function changePassword() {
+    if (!pwForm.newPw || !pwForm.confirm) { setPwError('All fields are required.'); return }
+    if (pwForm.newPw !== pwForm.confirm) { setPwError('Passwords do not match.'); return }
+    if (pwForm.newPw.length < 6) { setPwError('Password must be at least 6 characters.'); return }
+    setSaving(true); setPwError(''); setPwSuccess('')
+
+    const { error } = await supabase.auth.updateUser({ password: pwForm.newPw })
+    if (error) { setPwError(error.message); setSaving(false); return }
+
+    setPwSuccess('✅ Password changed successfully!')
+    setPwForm({ current: '', newPw: '', confirm: '' })
     setSaving(false)
   }
 
@@ -113,8 +121,6 @@ export default function StaffPage() {
     load()
   }
 
-  const roleLabel = { store_manager: 'Store Manager', cs_rep: 'CS Rep', finance_officer: 'Finance Officer' }
-
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between">
@@ -122,7 +128,10 @@ export default function StaffPage() {
           <h1 className="page-title">Staff</h1>
           <p className="text-ink-400 text-sm mt-0.5">{staff.filter(s => s.is_active).length} active staff members</p>
         </div>
-        <button onClick={() => setShowForm(true)} className="btn-primary">+ Add Staff</button>
+        <div className="flex gap-2">
+          <button onClick={() => { setPwModal(true); setPwError(''); setPwSuccess('') }} className="btn-secondary text-sm">🔑 Change My Password</button>
+          <button onClick={() => setShowForm(true)} className="btn-primary">+ Add Staff</button>
+        </div>
       </div>
 
       <div className="space-y-3">
@@ -135,19 +144,17 @@ export default function StaffPage() {
                 </div>
                 <div className="min-w-0">
                   <p className="font-semibold text-ink-900 text-sm">{s.full_name}</p>
-                  <p className="text-xs text-ink-400">{roleLabel[s.role] || s.role} · @{s.username || 'no username'}</p>
+                  <p className="text-xs text-ink-400 capitalize">{s.role?.replace(/_/g, ' ')} · @{s.username || 'no username'}</p>
                   {s.phone && <p className="text-xs text-ink-400">{s.phone}</p>}
                 </div>
               </div>
-              <div className="flex items-center gap-2 flex-shrink-0">
-                {s.auth_id ? (
-                  <span className="badge bg-green-50 text-green-700">Login set</span>
-                ) : (
-                  <span className="badge bg-amber-50 text-amber-700">No login</span>
-                )}
+              <div className="flex-shrink-0">
+                {s.auth_id
+                  ? <span className="badge bg-green-50 text-green-700">Login set</span>
+                  : <span className="badge bg-amber-50 text-amber-700">No login</span>}
               </div>
             </div>
-            <div className="flex gap-2 mt-3 pt-3 border-t border-surface-100">
+            <div className="flex gap-2 mt-3 pt-3 border-t border-surface-100 flex-wrap">
               <button
                 onClick={() => { setCredModal(s); setCredForm({ username: s.username || '', password: '', confirmPassword: '' }); setCredError(''); setCredSuccess('') }}
                 className="text-xs px-3 py-1.5 rounded-lg bg-brand-50 text-brand-700 font-medium hover:bg-brand-100">
@@ -166,7 +173,7 @@ export default function StaffPage() {
           <div className="card text-center py-12">
             <p className="text-3xl mb-2">◉</p>
             <p className="text-ink-500 font-medium">No staff added yet</p>
-            <p className="text-sm text-ink-400 mt-1">Add your CS Reps, Store Manager and Finance team.</p>
+            <p className="text-sm text-ink-400 mt-1">Add your CS Reps, Store Manager, Finance team and more.</p>
           </div>
         )}
       </div>
@@ -180,18 +187,28 @@ export default function StaffPage() {
               <button onClick={() => { setShowForm(false); setError('') }} className="text-ink-300 text-xl">✕</button>
             </div>
             <div className="p-5 space-y-4">
-              <div><label className="label">Full Name</label><input className="input" value={form.full_name} onChange={e => setForm(f => ({...f, full_name: e.target.value}))} placeholder="Staff full name" /></div>
-              <div><label className="label">Role</label>
-                <select className="input" value={form.role} onChange={e => setForm(f => ({...f, role: e.target.value}))}>
-                  {ROLES.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
-                </select>
+              <div>
+                <label className="label">Full Name</label>
+                <input className="input" value={form.full_name} onChange={e => setForm(f => ({...f, full_name: e.target.value}))} placeholder="Staff full name" />
               </div>
-              <div><label className="label">Username</label>
+              <div>
+                <label className="label">Role</label>
+                <input className="input" value={form.role} onChange={e => setForm(f => ({...f, role: e.target.value}))} placeholder="e.g. CS Rep, Media Manager, Logistics Manager" />
+                <p className="text-xs text-ink-400 mt-1">Type any role — no restrictions.</p>
+              </div>
+              <div>
+                <label className="label">Username</label>
                 <input className="input" value={form.username} onChange={e => setForm(f => ({...f, username: e.target.value.toLowerCase().replace(/\s/g, '_')}))} placeholder="e.g. amaka_cs" />
-                <p className="text-xs text-ink-400 mt-1">This is what they use to log in. Lowercase, no spaces.</p>
+                <p className="text-xs text-ink-400 mt-1">Lowercase, no spaces. Used to log in.</p>
               </div>
-              <div><label className="label">Phone</label><input className="input" value={form.phone} onChange={e => setForm(f => ({...f, phone: e.target.value}))} placeholder="08012345678" /></div>
-              <div><label className="label">Email (optional)</label><input type="email" className="input" value={form.email} onChange={e => setForm(f => ({...f, email: e.target.value}))} placeholder="For password recovery" /></div>
+              <div>
+                <label className="label">Phone</label>
+                <input className="input" value={form.phone} onChange={e => setForm(f => ({...f, phone: e.target.value}))} placeholder="08012345678" />
+              </div>
+              <div>
+                <label className="label">Email <span className="text-ink-300 font-normal normal-case">(optional — for password recovery)</span></label>
+                <input type="email" className="input" value={form.email} onChange={e => setForm(f => ({...f, email: e.target.value}))} placeholder="staff@email.com" />
+              </div>
               {error && <p className="text-sm text-danger bg-red-50 px-3 py-2 rounded-xl">{error}</p>}
               <div className="flex gap-3 pt-2">
                 <button onClick={() => { setShowForm(false); setError('') }} className="btn-secondary flex-1">Cancel</button>
@@ -213,16 +230,19 @@ export default function StaffPage() {
             <div className="p-5 space-y-4">
               <div className="bg-surface-50 rounded-xl p-3">
                 <p className="text-sm font-semibold text-ink-900">{credModal.full_name}</p>
-                <p className="text-xs text-ink-400">{roleLabel[credModal.role]}</p>
+                <p className="text-xs text-ink-400 capitalize">{credModal.role?.replace(/_/g, ' ')}</p>
               </div>
-              <div><label className="label">Username</label>
-                <input className="input" value={credForm.username} onChange={e => setCredForm(f => ({...f, username: e.target.value.toLowerCase().replace(/\s/g, '_')}))} placeholder="e.g. amaka_cs" />
+              <div>
+                <label className="label">Username</label>
+                <input className="input" value={credForm.username} onChange={e => setCredForm(f => ({...f, username: e.target.value.toLowerCase().replace(/\s/g, '_')}))} />
               </div>
-              <div><label className="label">Password</label>
+              <div>
+                <label className="label">Password</label>
                 <input type="password" className="input" value={credForm.password} onChange={e => setCredForm(f => ({...f, password: e.target.value}))} placeholder="Minimum 6 characters" />
               </div>
-              <div><label className="label">Confirm Password</label>
-                <input type="password" className="input" value={credForm.confirmPassword} onChange={e => setCredForm(f => ({...f, confirmPassword: e.target.value}))} placeholder="Repeat password" />
+              <div>
+                <label className="label">Confirm Password</label>
+                <input type="password" className="input" value={credForm.confirmPassword} onChange={e => setCredForm(f => ({...f, confirmPassword: e.target.value}))} />
               </div>
               {credError && <p className="text-sm text-danger bg-red-50 px-3 py-2 rounded-xl">{credError}</p>}
               {credSuccess && <p className="text-sm text-green-700 bg-green-50 px-3 py-2 rounded-xl">{credSuccess}</p>}
@@ -230,6 +250,36 @@ export default function StaffPage() {
                 <button onClick={() => setCredModal(null)} className="btn-secondary flex-1">Close</button>
                 <button onClick={setupCredentials} disabled={saving} className="btn-primary flex-1">{saving ? 'Setting up…' : 'Set Credentials'}</button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Change Password Modal */}
+      {pwModal && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl w-full max-w-sm shadow-panel p-5 space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="font-semibold text-ink-900">Change My Password</h3>
+              <button onClick={() => setPwModal(false)} className="text-ink-300 text-xl">✕</button>
+            </div>
+            <div className="bg-surface-50 rounded-xl p-3">
+              <p className="text-sm font-semibold text-ink-900">{profile?.full_name}</p>
+              <p className="text-xs text-ink-400">@{profile?.username}</p>
+            </div>
+            <div>
+              <label className="label">New Password</label>
+              <input type="password" className="input" value={pwForm.newPw} onChange={e => setPwForm(f => ({...f, newPw: e.target.value}))} placeholder="Minimum 6 characters" />
+            </div>
+            <div>
+              <label className="label">Confirm New Password</label>
+              <input type="password" className="input" value={pwForm.confirm} onChange={e => setPwForm(f => ({...f, confirm: e.target.value}))} />
+            </div>
+            {pwError && <p className="text-sm text-danger bg-red-50 px-3 py-2 rounded-xl">{pwError}</p>}
+            {pwSuccess && <p className="text-sm text-green-700 bg-green-50 px-3 py-2 rounded-xl">{pwSuccess}</p>}
+            <div className="flex gap-3">
+              <button onClick={() => setPwModal(false)} className="btn-secondary flex-1">Close</button>
+              <button onClick={changePassword} disabled={saving} className="btn-primary flex-1">{saving ? 'Changing…' : 'Change Password'}</button>
             </div>
           </div>
         </div>

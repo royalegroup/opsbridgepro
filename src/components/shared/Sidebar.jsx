@@ -91,7 +91,7 @@ export default function Sidebar({ activePage, onNavigate, businessType }) {
             </div>
             <div className="flex-1 min-w-0">
               <p className="text-sm font-semibold text-ink-900 truncate">{profile?.full_name}</p>
-              <p className="text-xs text-ink-400">{roleLabel}</p>
+              <p className="text-xs text-ink-400">@{profile?.username || roleLabel}</p>
             </div>
             <button onClick={signOut} title="Sign out" className="text-ink-300 hover:text-danger transition-colors text-lg">⏻</button>
           </div>

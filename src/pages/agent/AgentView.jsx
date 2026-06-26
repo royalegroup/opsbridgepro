@@ -20,19 +20,31 @@ export default function AgentView() {
   useEffect(() => { if (profile?.id) load() }, [profile])
 
   async function load() {
-    const [aRes, dRes, sRes, cRes] = await Promise.all([
-      supabase.from('agents').select('*').eq('user_id', profile.id).single(),
+    // First get the agent record using the user's profile ID
+    const { data: agentData } = await supabase
+      .from('agents')
+      .select('*')
+      .eq('user_id', profile.id)
+      .single()
+
+    if (!agentData) return
+    setAgent(agentData)
+
+    // Now use agent.id for all subsequent queries
+    const [dRes, sRes, cRes] = await Promise.all([
       supabase.from('logistics_requests')
         .select('*, orders(*, customers(full_name, phone, address), order_items(product_id, quantity))')
-        .eq('assigned_agent', profile.id)
+        .eq('assigned_agent', agentData.id)
         .order('created_at', { ascending: false }),
-      supabase.from('agent_stock').select('*, products(name)').eq('agent_id', profile.id),
+      supabase.from('agent_stock')
+        .select('*, products(name)')
+        .eq('agent_id', agentData.id),
       supabase.from('cod_remittances')
         .select('*, logistics_requests(orders(customers(full_name)))')
-        .eq('agent_id', profile.id)
+        .eq('agent_id', agentData.id)
         .order('created_at', { ascending: false }),
     ])
-    if (aRes.data) setAgent(aRes.data)
+
     if (dRes.data) setDeliveries(dRes.data)
     if (sRes.data) setStock(sRes.data)
     if (cRes.data) setCodRecords(cRes.data)
