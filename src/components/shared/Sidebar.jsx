@@ -24,34 +24,21 @@ const LOGISTICS_NAV = [
   { label: 'Reports', icon: '◧', page: 'reports' },
 ]
 
-const ROLE_NAV_FILTER = {
-  owner: null,
-  store_manager: ['dashboard', 'orders', 'customers', 'products', 'stock'],
-  cs_rep: ['dashboard', 'orders', 'customers'],
-  finance_officer: ['dashboard', 'finance', 'reports'],
-  ops_manager: ['dashboard', 'requests', 'agents', 'stock', 'deliveries', 'cod'],
-  logistics_finance: ['dashboard', 'cod', 'reports'],
-}
-
 export default function Sidebar({ activePage, onNavigate, businessType }) {
   const { profile, signOut } = useAuth()
   const [mobileOpen, setMobileOpen] = useState(false)
 
   const allNav = businessType === 'merchant' ? MERCHANT_NAV : LOGISTICS_NAV
-  const allowed = ROLE_NAV_FILTER[profile?.role]
-  const nav = allowed ? allNav.filter(n => allowed.includes(n.page)) : allNav
 
-  const roleLabel = {
-    owner: 'Owner',
-    store_manager: 'Store Manager',
-    cs_rep: 'CS Rep',
-    finance_officer: 'Finance',
-    ops_manager: 'Ops Manager',
-    logistics_finance: 'Finance',
-    agent: 'Delivery Agent',
-  }[profile?.role] || profile?.role
+  // Owners and users with empty permissions array see everything
+  // All other users see only what's in their permissions array
+  const isOwner = profile?.role === 'owner'
+  const permissions = profile?.permissions || []
+  const hasFullAccess = isOwner || permissions.length === 0
 
-  const businessLabel = businessType === 'merchant' ? '🛍' : '🚚'
+  const nav = hasFullAccess
+    ? allNav
+    : allNav.filter(n => permissions.includes(n.page))
 
   function NavContent() {
     return (
@@ -59,12 +46,12 @@ export default function Sidebar({ activePage, onNavigate, businessType }) {
         {/* Brand */}
         <div className="px-4 py-5 border-b border-surface-200">
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-brand-600 flex items-center justify-center text-white font-bold text-sm flex-shrink-0">
-              ◈
-            </div>
+            <div className="w-9 h-9 rounded-xl bg-brand-600 flex items-center justify-center text-white font-bold text-sm flex-shrink-0">◈</div>
             <div className="min-w-0">
               <p className="font-bold text-ink-900 text-sm leading-tight">OpsBridge Pro</p>
-              <p className="text-xs text-ink-400 truncate">{businessLabel} {profile?.businesses?.name}</p>
+              <p className="text-xs text-ink-400 truncate">
+                {businessType === 'merchant' ? '🛍' : '🚚'} {profile?.businesses?.name}
+              </p>
             </div>
           </div>
         </div>
@@ -75,8 +62,7 @@ export default function Sidebar({ activePage, onNavigate, businessType }) {
             <button
               key={item.page}
               onClick={() => { onNavigate(item.page); setMobileOpen(false) }}
-              className={`nav-item w-full text-left ${activePage === item.page ? 'nav-item-active' : 'nav-item-inactive'}`}
-            >
+              className={`nav-item w-full text-left ${activePage === item.page ? 'nav-item-active' : 'nav-item-inactive'}`}>
               <span className="text-base w-5 flex-shrink-0">{item.icon}</span>
               <span>{item.label}</span>
             </button>
@@ -91,7 +77,7 @@ export default function Sidebar({ activePage, onNavigate, businessType }) {
             </div>
             <div className="flex-1 min-w-0">
               <p className="text-sm font-semibold text-ink-900 truncate">{profile?.full_name}</p>
-              <p className="text-xs text-ink-400">@{profile?.username || roleLabel}</p>
+              <p className="text-xs text-ink-400">@{profile?.username || profile?.role}</p>
             </div>
             <button onClick={signOut} title="Sign out" className="text-ink-300 hover:text-danger transition-colors text-lg">⏻</button>
           </div>
@@ -113,9 +99,7 @@ export default function Sidebar({ activePage, onNavigate, businessType }) {
           <div className="w-7 h-7 rounded-lg bg-brand-600 flex items-center justify-center text-white text-xs font-bold">◈</div>
           <span className="font-bold text-ink-900 text-sm">OpsBridge Pro</span>
         </div>
-        <button onClick={() => setMobileOpen(true)} className="w-9 h-9 flex items-center justify-center rounded-xl bg-surface-100 text-ink-700">
-          ☰
-        </button>
+        <button onClick={() => setMobileOpen(true)} className="w-9 h-9 flex items-center justify-center rounded-xl bg-surface-100 text-ink-700">☰</button>
       </div>
 
       {/* Mobile drawer */}

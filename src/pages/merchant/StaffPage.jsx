@@ -2,15 +2,36 @@ import { useEffect, useState } from 'react'
 import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../contexts/AuthContext'
 
+const MERCHANT_PAGES = [
+  { key: 'dashboard', label: 'Dashboard' },
+  { key: 'orders', label: 'Orders' },
+  { key: 'tasks', label: 'Tasks' },
+  { key: 'customers', label: 'Customers' },
+  { key: 'products', label: 'Products' },
+  { key: 'stock', label: 'Stock' },
+  { key: 'finance', label: 'Finance' },
+  { key: 'staff', label: 'Staff' },
+  { key: 'reports', label: 'Reports' },
+]
+
+const PERMISSION_PRESETS = [
+  { label: 'CS Rep', permissions: ['dashboard', 'orders', 'customers', 'tasks'] },
+  { label: 'Store Manager', permissions: ['dashboard', 'orders', 'customers', 'products', 'stock', 'tasks', 'staff'] },
+  { label: 'Finance Officer', permissions: ['dashboard', 'finance', 'reports'] },
+  { label: 'Full Access', permissions: [] },
+]
+
 export default function StaffPage() {
   const { profile } = useAuth()
   const [staff, setStaff] = useState([])
   const [showForm, setShowForm] = useState(false)
   const [credModal, setCredModal] = useState(null)
   const [pwModal, setPwModal] = useState(false)
-  const [form, setForm] = useState({ full_name: '', phone: '', email: '', role: '', username: '' })
+  const [permModal, setPermModal] = useState(null)
+  const [form, setForm] = useState({ full_name: '', phone: '', email: '', role: '', username: '', permissions: ['dashboard', 'orders', 'customers', 'tasks'] })
   const [credForm, setCredForm] = useState({ username: '', password: '', confirmPassword: '' })
-  const [pwForm, setPwForm] = useState({ current: '', newPw: '', confirm: '' })
+  const [pwForm, setPwForm] = useState({ newPw: '', confirm: '' })
+  const [permEdit, setPermEdit] = useState([])
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [credError, setCredError] = useState('')
@@ -30,35 +51,56 @@ export default function StaffPage() {
     if (data) setStaff(data)
   }
 
+  function togglePermission(key) {
+    setForm(f => ({
+      ...f,
+      permissions: f.permissions.includes(key)
+        ? f.permissions.filter(p => p !== key)
+        : [...f.permissions, key]
+    }))
+  }
+
+  function applyPreset(preset) {
+    setForm(f => ({ ...f, permissions: preset.permissions }))
+  }
+
   async function save() {
     if (!form.full_name || !form.role || !form.username) { setError('Name, role and username are required.'); return }
     setSaving(true); setError('')
 
-    // Check username uniqueness
     const { data: existing } = await supabase.from('users').select('id').eq('username', form.username.toLowerCase()).maybeSingle()
     if (existing) { setError('Username already taken. Choose another.'); setSaving(false); return }
 
-    // Check email uniqueness only if email provided
     if (form.email) {
       const { data: emailExists } = await supabase.from('users').select('id').eq('email', form.email.toLowerCase()).maybeSingle()
-      if (emailExists) { setError('Email already in use. Use a different email or leave it blank.'); setSaving(false); return }
+      if (emailExists) { setError('Email already in use. Leave blank if unsure.'); setSaving(false); return }
     }
 
     const { error: insertError } = await supabase.from('users').insert({
       full_name: form.full_name,
       phone: form.phone || null,
-      email: form.email?.toLowerCase() || `staff_${Date.now()}_${Math.random().toString(36).slice(2)}@opsbridgepro.internal`,
+      email: form.email?.toLowerCase() || `staff_${Date.now()}_${Math.random().toString(36).slice(2, 7)}@opsbridgepro.internal`,
       role: form.role.toLowerCase().replace(/\s+/g, '_'),
       username: form.username.toLowerCase().trim(),
       business_id: profile.business_id,
       business_type: 'merchant',
       is_active: true,
+      permissions: form.permissions,
     })
 
     if (insertError) { setError(`Failed: ${insertError.message}`); setSaving(false); return }
 
     setShowForm(false)
-    setForm({ full_name: '', phone: '', email: '', role: '', username: '' })
+    setForm({ full_name: '', phone: '', email: '', role: '', username: '', permissions: ['dashboard', 'orders', 'customers', 'tasks'] })
+    load()
+    setSaving(false)
+  }
+
+  async function savePermissions() {
+    if (!permModal) return
+    setSaving(true)
+    await supabase.from('users').update({ permissions: permEdit }).eq('id', permModal.id)
+    setPermModal(null)
     load()
     setSaving(false)
   }
@@ -70,12 +112,8 @@ export default function StaffPage() {
 
     setSaving(true); setCredError(''); setCredSuccess('')
 
-    const { data: existing } = await supabase
-      .from('users').select('id')
-      .eq('username', credForm.username.toLowerCase())
-      .neq('id', credModal.id)
-      .maybeSingle()
-
+    const { data: existing } = await supabase.from('users').select('id')
+      .eq('username', credForm.username.toLowerCase()).neq('id', credModal.id).maybeSingle()
     if (existing) { setCredError('Username already taken.'); setSaving(false); return }
 
     const authEmail = credModal.email.includes('@opsbridgepro.internal')
@@ -107,12 +145,10 @@ export default function StaffPage() {
     if (pwForm.newPw !== pwForm.confirm) { setPwError('Passwords do not match.'); return }
     if (pwForm.newPw.length < 6) { setPwError('Password must be at least 6 characters.'); return }
     setSaving(true); setPwError(''); setPwSuccess('')
-
     const { error } = await supabase.auth.updateUser({ password: pwForm.newPw })
     if (error) { setPwError(error.message); setSaving(false); return }
-
     setPwSuccess('✅ Password changed successfully!')
-    setPwForm({ current: '', newPw: '', confirm: '' })
+    setPwForm({ newPw: '', confirm: '' })
     setSaving(false)
   }
 
@@ -123,12 +159,12 @@ export default function StaffPage() {
 
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-2">
         <div>
           <h1 className="page-title">Staff</h1>
           <p className="text-ink-400 text-sm mt-0.5">{staff.filter(s => s.is_active).length} active staff members</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
           <button onClick={() => { setPwModal(true); setPwError(''); setPwSuccess('') }} className="btn-secondary text-sm">🔑 Change My Password</button>
           <button onClick={() => setShowForm(true)} className="btn-primary">+ Add Staff</button>
         </div>
@@ -146,6 +182,12 @@ export default function StaffPage() {
                   <p className="font-semibold text-ink-900 text-sm">{s.full_name}</p>
                   <p className="text-xs text-ink-400 capitalize">{s.role?.replace(/_/g, ' ')} · @{s.username || 'no username'}</p>
                   {s.phone && <p className="text-xs text-ink-400">{s.phone}</p>}
+                  {s.permissions?.length > 0 && (
+                    <p className="text-xs text-brand-600 mt-0.5">
+                      Access: {s.permissions.join(', ')}
+                    </p>
+                  )}
+                  {s.permissions?.length === 0 && <p className="text-xs text-green-600 mt-0.5">Full access</p>}
                 </div>
               </div>
               <div className="flex-shrink-0">
@@ -158,7 +200,12 @@ export default function StaffPage() {
               <button
                 onClick={() => { setCredModal(s); setCredForm({ username: s.username || '', password: '', confirmPassword: '' }); setCredError(''); setCredSuccess('') }}
                 className="text-xs px-3 py-1.5 rounded-lg bg-brand-50 text-brand-700 font-medium hover:bg-brand-100">
-                {s.auth_id ? 'Update Credentials' : 'Set Login Credentials'}
+                {s.auth_id ? 'Update Credentials' : 'Set Login'}
+              </button>
+              <button
+                onClick={() => { setPermModal(s); setPermEdit(s.permissions || []) }}
+                className="text-xs px-3 py-1.5 rounded-lg bg-surface-100 text-ink-700 font-medium hover:bg-surface-200">
+                Edit Access
               </button>
               <button
                 onClick={() => toggleActive(s.id, s.is_active)}
@@ -193,7 +240,7 @@ export default function StaffPage() {
               </div>
               <div>
                 <label className="label">Role</label>
-                <input className="input" value={form.role} onChange={e => setForm(f => ({...f, role: e.target.value}))} placeholder="e.g. CS Rep, Media Manager, Logistics Manager" />
+                <input className="input" value={form.role} onChange={e => setForm(f => ({...f, role: e.target.value}))} placeholder="e.g. CS Rep, Media Manager, Accountant" />
                 <p className="text-xs text-ink-400 mt-1">Type any role — no restrictions.</p>
               </div>
               <div>
@@ -206,14 +253,75 @@ export default function StaffPage() {
                 <input className="input" value={form.phone} onChange={e => setForm(f => ({...f, phone: e.target.value}))} placeholder="08012345678" />
               </div>
               <div>
-                <label className="label">Email <span className="text-ink-300 font-normal normal-case">(optional — for password recovery)</span></label>
-                <input type="email" className="input" value={form.email} onChange={e => setForm(f => ({...f, email: e.target.value}))} placeholder="staff@email.com" />
+                <label className="label">Email <span className="text-ink-300 font-normal normal-case">(optional)</span></label>
+                <input type="email" className="input" value={form.email} onChange={e => setForm(f => ({...f, email: e.target.value}))} placeholder="For password recovery" />
               </div>
+
+              {/* Permissions */}
+              <div>
+                <label className="label">Access Permissions</label>
+                <div className="flex gap-2 flex-wrap mb-2">
+                  {PERMISSION_PRESETS.map(p => (
+                    <button key={p.label} type="button" onClick={() => applyPreset(p)}
+                      className="text-xs px-2.5 py-1 rounded-lg bg-brand-50 text-brand-700 font-medium hover:bg-brand-100">
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
+                <div className="flex flex-wrap gap-1.5 p-3 border border-surface-200 rounded-xl">
+                  {MERCHANT_PAGES.map(p => (
+                    <button key={p.key} type="button" onClick={() => togglePermission(p.key)}
+                      className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${form.permissions.includes(p.key) ? 'bg-brand-600 text-white' : 'bg-surface-100 text-ink-600 hover:bg-surface-200'}`}>
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
+                <p className="text-xs text-ink-400 mt-1">
+                  {form.permissions.length === 0 ? 'Full access to everything' : `${form.permissions.length} pages selected`}
+                </p>
+              </div>
+
               {error && <p className="text-sm text-danger bg-red-50 px-3 py-2 rounded-xl">{error}</p>}
               <div className="flex gap-3 pt-2">
                 <button onClick={() => { setShowForm(false); setError('') }} className="btn-secondary flex-1">Cancel</button>
                 <button onClick={save} disabled={saving} className="btn-primary flex-1">{saving ? 'Saving…' : 'Add Staff'}</button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Permissions Modal */}
+      {permModal && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl w-full max-w-md shadow-panel p-5 space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="font-semibold text-ink-900">Edit Access — {permModal.full_name}</h3>
+              <button onClick={() => setPermModal(null)} className="text-ink-300 text-xl">✕</button>
+            </div>
+            <div className="flex gap-2 flex-wrap">
+              {PERMISSION_PRESETS.map(p => (
+                <button key={p.label} type="button" onClick={() => setPermEdit(p.permissions)}
+                  className="text-xs px-2.5 py-1 rounded-lg bg-brand-50 text-brand-700 font-medium hover:bg-brand-100">
+                  {p.label}
+                </button>
+              ))}
+            </div>
+            <div className="flex flex-wrap gap-1.5 p-3 border border-surface-200 rounded-xl">
+              {MERCHANT_PAGES.map(p => (
+                <button key={p.key} type="button"
+                  onClick={() => setPermEdit(pe => pe.includes(p.key) ? pe.filter(x => x !== p.key) : [...pe, p.key])}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${permEdit.includes(p.key) ? 'bg-brand-600 text-white' : 'bg-surface-100 text-ink-600 hover:bg-surface-200'}`}>
+                  {p.label}
+                </button>
+              ))}
+            </div>
+            <p className="text-xs text-ink-400">
+              {permEdit.length === 0 ? 'Full access to everything' : `${permEdit.length} pages selected`}
+            </p>
+            <div className="flex gap-3">
+              <button onClick={() => setPermModal(null)} className="btn-secondary flex-1">Cancel</button>
+              <button onClick={savePermissions} disabled={saving} className="btn-primary flex-1">{saving ? 'Saving…' : 'Save Access'}</button>
             </div>
           </div>
         </div>
