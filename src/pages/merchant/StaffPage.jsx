@@ -32,30 +32,38 @@ export default function StaffPage() {
     if (data) setStaff(data)
   }
 
-  async function save() {
-    if (!form.full_name || !form.role || !form.username) { setError('Name, role and username are required.'); return }
-    setSaving(true); setError('')
+ async function save() {
+  if (!form.full_name || !form.role || !form.username) { setError('Name, role and username are required.'); return }
+  setSaving(true); setError('')
 
-    // Check username uniqueness
-    const { data: existing } = await supabase.from('users').select('id').eq('username', form.username.toLowerCase()).maybeSingle()
-    if (existing) { setError('Username already taken. Choose another.'); setSaving(false); return }
+  // Check username uniqueness
+  const { data: existing } = await supabase.from('users').select('id').eq('username', form.username.toLowerCase()).maybeSingle()
+  if (existing) { setError('Username already taken. Choose another.'); setSaving(false); return }
 
-    await supabase.from('users').insert({
-      full_name: form.full_name,
-      phone: form.phone,
-      email: form.email || `staff_${Date.now()}@opsbridgepro.internal`,
-      role: form.role,
-      username: form.username.toLowerCase(),
-      business_id: profile.business_id,
-      business_type: 'merchant',
-      is_active: true,
-    })
+  const { data, error: insertError } = await supabase.from('users').insert({
+    full_name: form.full_name,
+    phone: form.phone,
+    email: form.email || `staff_${Date.now()}@opsbridgepro.internal`,
+    role: form.role,
+    username: form.username.toLowerCase(),
+    business_id: profile.business_id,
+    business_type: 'merchant',
+    is_active: true,
+  }).select()
 
-    setShowForm(false)
-    setForm({ full_name: '', phone: '', email: '', role: 'cs_rep', username: '' })
-    load()
+  console.log('Staff insert result:', { data, insertError })
+
+  if (insertError) {
+    setError(`Failed to add staff: ${insertError.message}`)
     setSaving(false)
+    return
   }
+
+  setShowForm(false)
+  setForm({ full_name: '', phone: '', email: '', role: 'cs_rep', username: '' })
+  load()
+  setSaving(false)
+}
 
   async function setupCredentials() {
     if (!credForm.username || !credForm.password) { setCredError('Username and password are required.'); return }
