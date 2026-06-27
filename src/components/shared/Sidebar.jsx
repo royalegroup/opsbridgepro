@@ -10,6 +10,7 @@ const MERCHANT_NAV = [
   { label: 'Bundles', icon: '📦', page: 'bundles' },
   { label: 'Stock', icon: '⬡', page: 'stock' },
   { label: 'Finance', icon: '◆', page: 'finance' },
+  { label: 'Expenses', icon: '💰', page: 'expenses' },
   { label: 'Staff', icon: '◧', page: 'staff' },
   { label: 'Reports', icon: '▦', page: 'reports' },
 ]
