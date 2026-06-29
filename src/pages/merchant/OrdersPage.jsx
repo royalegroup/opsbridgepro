@@ -3,6 +3,7 @@ import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../contexts/AuthContext'
 import Badge from '../../components/shared/Badge'
 import { createFollowUpTask } from '../../lib/taskHelpers'
+import ReceiptModal from '../../components/merchant/ReceiptModal'
 
 const STATUSES = ['all', 'new', 'assigned', 'confirmed', 'sent_to_logistics', 'in_transit', 'delivered', 'failed', 'cancelled']
 const NIGERIAN_STATES = ['Abia','Adamawa','Akwa Ibom','Anambra','Bauchi','Bayelsa','Benue','Borno','Cross River','Delta','Ebonyi','Edo','Ekiti','Enugu','FCT','Gombe','Imo','Jigawa','Kaduna','Kano','Katsina','Kebbi','Kogi','Kwara','Lagos','Nasarawa','Niger','Ogun','Ondo','Osun','Oyo','Plateau','Rivers','Sokoto','Taraba','Yobe','Zamfara']
@@ -17,6 +18,7 @@ export default function OrdersPage() {
   const [loading, setLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
   const [selectedOrder, setSelectedOrder] = useState(null)
+  const [receiptOrder, setReceiptOrder] = useState(null)
   const [form, setForm] = useState({ customer_id: '', product_id: '', quantity: 1, delivery_state: '', source: 'manual', notes: '' })
   const [saving, setSaving] = useState(false)
 
@@ -74,40 +76,33 @@ export default function OrdersPage() {
   }
 
   async function updateStatus(orderId, status) {
-  await supabase.from('orders').update({ status }).eq('id', orderId)
+    await supabase.from('orders').update({ status }).eq('id', orderId)
 
-  // Fetch full order with customer data for task creation
-  const { data: order } = await supabase
-    .from('orders')
-    .select('*, customers(full_name, phone)')
-    .eq('id', orderId)
-    .single()
+    const order = orders.find(o => o.id === orderId)
 
-  if (status === 'confirmed' && order) {
-    const link = await supabase
-      .from('merchant_logistics_links')
-      .select('logistics_id')
-      .eq('merchant_id', profile.business_id)
-      .eq('is_active', true)
-      .single()
-    if (link.data) {
-      await supabase.from('logistics_requests').insert({
-        order_id: orderId,
-        merchant_id: profile.business_id,
-        logistics_id: link.data.logistics_id,
-        delivery_state: order?.delivery_state,
-        status: 'pending'
-      })
-      await supabase.from('orders').update({ status: 'sent_to_logistics' }).eq('id', orderId)
+    // If confirmed, auto-create logistics request
+    if (status === 'confirmed') {
+      const link = await supabase.from('merchant_logistics_links').select('logistics_id').eq('merchant_id', profile.business_id).eq('is_active', true).single()
+      if (link.data) {
+        await supabase.from('logistics_requests').insert({
+          order_id: orderId,
+          merchant_id: profile.business_id,
+          logistics_id: link.data.logistics_id,
+          delivery_state: order?.delivery_state,
+          status: 'pending'
+        })
+        await supabase.from('orders').update({ status: 'sent_to_logistics' }).eq('id', orderId)
+      }
     }
+
+    // Auto-create follow-up task on delivered or failed
+    if ((status === 'delivered' || status === 'failed') && order) {
+      await createFollowUpTask(order, status, profile.business_id)
+    }
+
+    loadAll()
   }
 
-  if ((status === 'delivered' || status === 'failed') && order) {
-    await createFollowUpTask(order, status, profile.business_id)
-  }
-
-  loadAll()
-}
   async function assignRep(orderId, repId) {
     await supabase.from('orders').update({ assigned_cs_rep: repId, status: 'assigned' }).eq('id', orderId)
     loadAll()
@@ -184,11 +179,31 @@ export default function OrdersPage() {
                     </button>
                   </div>
                 )}
+
+                {/* Receipt button for delivered orders */}
+                {order.status === 'delivered' && (
+                  <div className="mt-3">
+                    <button
+                      onClick={() => setReceiptOrder(order)}
+                      className="text-xs px-3 py-1.5 rounded-lg bg-brand-50 text-brand-700 font-medium hover:bg-brand-100 transition-colors flex items-center gap-1.5">
+                      🧾 Generate Receipt
+                    </button>
+                  </div>
+                )}
               </div>
             ))}
           </div>
         )}
       </div>
+
+      {/* Receipt Modal */}
+      {receiptOrder && (
+        <ReceiptModal
+          order={receiptOrder}
+          business={profile?.businesses}
+          onClose={() => setReceiptOrder(null)}
+        />
+      )}
 
       {/* New Order Modal */}
       {showForm && (
