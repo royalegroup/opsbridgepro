@@ -84,8 +84,8 @@ export function generatePDFReceipt({ order, business, receipt, items }) {
   doc.setFontSize(7)
   doc.setFont('helvetica', 'bold')
   doc.text('DESCRIPTION', margin, y)
-  doc.text('QTY', pageWidth - margin - 30, y, { align: 'right' })
-  doc.text('UNIT PRICE', pageWidth - margin - 10, y, { align: 'right' })
+  doc.text('QTY', pageWidth - margin - 45, y, { align: 'right' })
+  doc.text('UNIT PRICE', pageWidth - margin - 22, y, { align: 'right' })
   doc.text('TOTAL', pageWidth - margin, y, { align: 'right' })
 
   y += 3
@@ -106,8 +106,8 @@ export function generatePDFReceipt({ order, business, receipt, items }) {
       const total = qty * unitPrice
 
       doc.text(name, margin, y)
-      doc.text(String(qty), pageWidth - margin - 30, y, { align: 'right' })
-      doc.text(`N${Number(unitPrice).toLocaleString()}`, pageWidth - margin - 10, y, { align: 'right' })
+      doc.text(String(qty), pageWidth - margin - 45, y, { align: 'right' })
+      doc.text(`N${Number(unitPrice).toLocaleString()}`, pageWidth - margin - 22, y, { align: 'right' })
       doc.text(`N${Number(total).toLocaleString()}`, pageWidth - margin, y, { align: 'right' })
       y += 7
     })
@@ -133,19 +133,13 @@ export function generatePDFReceipt({ order, business, receipt, items }) {
   doc.text(`N${Number(subtotal).toLocaleString()}`, pageWidth - margin, y, { align: 'right' })
   y += 6
 
-  if (deliveryFee > 0) {
-    doc.setTextColor(...inkMid)
-    doc.text('Delivery Fee', pageWidth - margin - 35, y)
-    doc.setTextColor(...inkDark)
-    doc.text(`N${Number(deliveryFee).toLocaleString()}`, pageWidth - margin, y, { align: 'right' })
-    y += 6
-  } else {
-    doc.setTextColor(...inkMid)
-    doc.text('Delivery Fee', pageWidth - margin - 35, y)
-    doc.setTextColor(22, 163, 74)
-    doc.text('FREE', pageWidth - margin, y, { align: 'right' })
-    y += 6
-  }
+  doc.setTextColor(...inkMid)
+  doc.text('Delivery Fee', pageWidth - margin - 35, y)
+  doc.setTextColor(22, 163, 74)
+  doc.setFont('helvetica', 'bold')
+  doc.text('FREE', pageWidth - margin, y, { align: 'right' })
+  doc.setFont('helvetica', 'normal')
+  y += 6
 
   // Grand total box
   doc.setFillColor(...brandColor)
