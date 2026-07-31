@@ -18,7 +18,7 @@ export default function BundlesPage() {
     const bid = profile.business_id
     const [bRes, pRes] = await Promise.all([
       supabase.from('product_bundles')
-        .select('*, bundle_items(quantity, products(id, name, cost_price, selling_price))')
+        .select('*, bundle_items(id, quantity, product_id, cost_price_snapshot, selling_price_snapshot, products(id, name))')
         .eq('merchant_id', bid)
         .order('created_at', { ascending: false }),
       supabase.from('products').select('id, name, cost_price, selling_price, delivery_fee').eq('merchant_id', bid).eq('is_active', true),
@@ -49,20 +49,31 @@ export default function BundlesPage() {
       description: bundle.description || '',
       bundle_price: bundle.bundle_price,
       delivery_fee: bundle.delivery_fee,
-      items: bundle.bundle_items.map(i => ({ product_id: i.products.id, quantity: i.quantity }))
+      // Load items using their SNAPSHOT prices, not live product prices
+      items: bundle.bundle_items.map(i => ({
+        product_id: i.product_id,
+        quantity: i.quantity,
+        cost_price_snapshot: i.cost_price_snapshot,
+        selling_price_snapshot: i.selling_price_snapshot,
+      }))
     })
+    setError('')
     setShowForm(true)
   }
 
   function openNew() {
     setEditBundle(null)
     setForm({ name: '', description: '', bundle_price: '', delivery_fee: '', items: [{ product_id: '', quantity: 1 }] })
+    setError('')
     setShowForm(true)
   }
 
-  // Calculate total cost of bundle items
+  // Calculate bundle cost using SNAPSHOT prices where available, else current product price (for new items)
   function calcBundleCost() {
     return form.items.reduce((total, item) => {
+      if (item.cost_price_snapshot != null) {
+        return total + (+item.cost_price_snapshot * item.quantity)
+      }
       const product = products.find(p => p.id === item.product_id)
       return total + (product ? +product.cost_price * item.quantity : 0)
     }, 0)
@@ -70,6 +81,22 @@ export default function BundlesPage() {
 
   function calcBundleProfit() {
     return +form.bundle_price - calcBundleCost() - +(form.delivery_fee || 0)
+  }
+
+  // Re-sync all items to current product prices (explicit user action)
+  function resyncToCurrentPrices() {
+    setForm(f => ({
+      ...f,
+      items: f.items.map(item => {
+        const product = products.find(p => p.id === item.product_id)
+        if (!product) return item
+        return {
+          ...item,
+          cost_price_snapshot: product.cost_price,
+          selling_price_snapshot: product.selling_price,
+        }
+      })
+    }))
   }
 
   async function save() {
@@ -82,8 +109,19 @@ export default function BundlesPage() {
 
     setSaving(true); setError('')
 
+    // Build item rows with snapshot prices — take existing snapshot if present,
+    // otherwise capture the CURRENT product price as the new snapshot
+    const itemRows = validItems.map(i => {
+      const product = products.find(p => p.id === i.product_id)
+      return {
+        product_id: i.product_id,
+        quantity: +i.quantity,
+        cost_price_snapshot: i.cost_price_snapshot != null ? i.cost_price_snapshot : (product?.cost_price || 0),
+        selling_price_snapshot: i.selling_price_snapshot != null ? i.selling_price_snapshot : (product?.selling_price || 0),
+      }
+    })
+
     if (editBundle) {
-      // Update existing bundle
       await supabase.from('product_bundles').update({
         name: form.name,
         description: form.description,
@@ -91,13 +129,11 @@ export default function BundlesPage() {
         delivery_fee: +(form.delivery_fee || 0),
       }).eq('id', editBundle.id)
 
-      // Delete old items and reinsert
       await supabase.from('bundle_items').delete().eq('bundle_id', editBundle.id)
       await supabase.from('bundle_items').insert(
-        validItems.map(i => ({ bundle_id: editBundle.id, product_id: i.product_id, quantity: +i.quantity }))
+        itemRows.map(row => ({ bundle_id: editBundle.id, ...row }))
       )
     } else {
-      // Create new bundle
       const { data: bundle, error: bundleError } = await supabase.from('product_bundles').insert({
         merchant_id: profile.business_id,
         name: form.name,
@@ -109,7 +145,7 @@ export default function BundlesPage() {
       if (bundleError) { setError(bundleError.message); setSaving(false); return }
 
       await supabase.from('bundle_items').insert(
-        validItems.map(i => ({ bundle_id: bundle.id, product_id: i.product_id, quantity: +i.quantity }))
+        itemRows.map(row => ({ bundle_id: bundle.id, ...row }))
       )
     }
 
@@ -136,7 +172,8 @@ export default function BundlesPage() {
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {bundles.map(b => {
-          const totalCost = b.bundle_items?.reduce((s, i) => s + (+i.products?.cost_price * i.quantity), 0) || 0
+          // Use SNAPSHOT cost, not live product cost — this is what makes reports accurate
+          const totalCost = b.bundle_items?.reduce((s, i) => s + (+i.cost_price_snapshot * i.quantity), 0) || 0
           const profit = +b.bundle_price - totalCost - +b.delivery_fee
           return (
             <div key={b.id} className={`card ${!b.is_active ? 'opacity-50' : ''}`}>
@@ -151,7 +188,6 @@ export default function BundlesPage() {
                 </button>
               </div>
 
-              {/* Bundle items */}
               <div className="mt-3 space-y-1.5">
                 <p className="text-xs font-semibold text-ink-400 uppercase tracking-wide">Includes</p>
                 {b.bundle_items?.map((item, i) => (
@@ -162,7 +198,6 @@ export default function BundlesPage() {
                 ))}
               </div>
 
-              {/* Pricing */}
               <div className="mt-3 grid grid-cols-3 gap-2">
                 <div className="bg-surface-50 rounded-xl p-2.5 text-center">
                   <p className="text-xs text-ink-400">Cost</p>
@@ -213,7 +248,18 @@ export default function BundlesPage() {
                 <input className="input" value={form.description} onChange={e => setForm(f => ({...f, description: e.target.value}))} placeholder="Brief description of the bundle" />
               </div>
 
-              {/* Bundle items */}
+              {editBundle && (
+                <div className="bg-amber-50 border border-amber-100 rounded-xl p-3 flex items-center justify-between gap-3">
+                  <p className="text-xs text-amber-700">
+                    This bundle uses locked-in costs from when it was created. Product price changes since then won't affect it unless you resync.
+                  </p>
+                  <button type="button" onClick={resyncToCurrentPrices}
+                    className="text-xs px-2.5 py-1.5 rounded-lg bg-amber-100 text-amber-800 font-medium hover:bg-amber-200 whitespace-nowrap flex-shrink-0">
+                    Resync Prices
+                  </button>
+                </div>
+              )}
+
               <div>
                 <div className="flex items-center justify-between mb-2">
                   <label className="label mb-0">Products in Bundle</label>
@@ -245,7 +291,6 @@ export default function BundlesPage() {
                 </div>
               </div>
 
-              {/* Pricing */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="label">Bundle Price (₦)</label>
@@ -257,7 +302,6 @@ export default function BundlesPage() {
                 </div>
               </div>
 
-              {/* Live profit preview */}
               {form.bundle_price && form.items.some(i => i.product_id) && (
                 <div className={`rounded-xl p-3 text-sm font-medium ${calcBundleProfit() >= 0 ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-600'}`}>
                   <div className="flex justify-between">
