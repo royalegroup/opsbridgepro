@@ -12,10 +12,16 @@ export default function CustomersPage() {
   const [form, setForm] = useState({ full_name: '', phone: '', state: '', address: '', notes: '' })
   const [saving, setSaving] = useState(false)
 
+  const isScoped = profile?.scope_own_records === true && profile?.role !== 'owner'
+
   useEffect(() => { if (profile?.business_id) load() }, [profile])
 
   async function load() {
-    const { data } = await supabase.from('customers').select('*').eq('merchant_id', profile.business_id).order('created_at', { ascending: false })
+    let query = supabase.from('customers').select('*').eq('merchant_id', profile.business_id).order('created_at', { ascending: false })
+    if (isScoped) {
+      query = query.eq('created_by', profile.id)
+    }
+    const { data } = await query
     if (data) setCustomers(data)
   }
 
@@ -28,7 +34,7 @@ export default function CustomersPage() {
   async function save() {
     if (!form.full_name || !form.phone) return
     setSaving(true)
-    await supabase.from('customers').insert({ ...form, merchant_id: profile.business_id })
+    await supabase.from('customers').insert({ ...form, merchant_id: profile.business_id, created_by: profile.id })
     setShowForm(false)
     setForm({ full_name: '', phone: '', state: '', address: '', notes: '' })
     load()
@@ -46,7 +52,9 @@ export default function CustomersPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="page-title">Customers</h1>
-          <p className="text-ink-400 text-sm mt-0.5">{customers.length} customers</p>
+          <p className="text-ink-400 text-sm mt-0.5">
+            {customers.length} {isScoped ? 'customers you added' : 'customers'}
+          </p>
         </div>
         <button onClick={() => setShowForm(true)} className="btn-primary">+ Add Customer</button>
       </div>

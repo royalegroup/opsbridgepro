@@ -8,17 +8,19 @@ const MERCHANT_PAGES = [
   { key: 'tasks', label: 'Tasks' },
   { key: 'customers', label: 'Customers' },
   { key: 'products', label: 'Products' },
+  { key: 'bundles', label: 'Bundles' },
   { key: 'stock', label: 'Stock' },
   { key: 'finance', label: 'Finance' },
+  { key: 'expenses', label: 'Expenses' },
   { key: 'staff', label: 'Staff' },
   { key: 'reports', label: 'Reports' },
 ]
 
 const PERMISSION_PRESETS = [
-  { label: 'CS Rep', permissions: ['dashboard', 'orders', 'customers', 'tasks'] },
-  { label: 'Store Manager', permissions: ['dashboard', 'orders', 'customers', 'products', 'stock', 'tasks', 'staff'] },
-  { label: 'Finance Officer', permissions: ['dashboard', 'finance', 'reports'] },
-  { label: 'Full Access', permissions: [] },
+  { label: 'CS Rep', permissions: ['dashboard', 'orders', 'customers', 'tasks'], scoped: true },
+  { label: 'Store Manager', permissions: ['dashboard', 'orders', 'customers', 'products', 'stock', 'tasks', 'staff'], scoped: false },
+  { label: 'Finance Officer', permissions: ['dashboard', 'finance', 'expenses', 'reports'], scoped: false },
+  { label: 'Full Access', permissions: [], scoped: false },
 ]
 
 export default function StaffPage() {
@@ -28,10 +30,11 @@ export default function StaffPage() {
   const [credModal, setCredModal] = useState(null)
   const [pwModal, setPwModal] = useState(false)
   const [permModal, setPermModal] = useState(null)
-  const [form, setForm] = useState({ full_name: '', phone: '', email: '', role: '', username: '', permissions: ['dashboard', 'orders', 'customers', 'tasks'] })
+  const [form, setForm] = useState({ full_name: '', phone: '', email: '', role: '', username: '', permissions: ['dashboard', 'orders', 'customers', 'tasks'], scope_own_records: true })
   const [credForm, setCredForm] = useState({ username: '', password: '', confirmPassword: '' })
   const [pwForm, setPwForm] = useState({ newPw: '', confirm: '' })
   const [permEdit, setPermEdit] = useState([])
+  const [scopeEdit, setScopeEdit] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [credError, setCredError] = useState('')
@@ -61,7 +64,7 @@ export default function StaffPage() {
   }
 
   function applyPreset(preset) {
-    setForm(f => ({ ...f, permissions: preset.permissions }))
+    setForm(f => ({ ...f, permissions: preset.permissions, scope_own_records: preset.scoped }))
   }
 
   async function save() {
@@ -86,12 +89,13 @@ export default function StaffPage() {
       business_type: 'merchant',
       is_active: true,
       permissions: form.permissions,
+      scope_own_records: form.scope_own_records,
     })
 
     if (insertError) { setError(`Failed: ${insertError.message}`); setSaving(false); return }
 
     setShowForm(false)
-    setForm({ full_name: '', phone: '', email: '', role: '', username: '', permissions: ['dashboard', 'orders', 'customers', 'tasks'] })
+    setForm({ full_name: '', phone: '', email: '', role: '', username: '', permissions: ['dashboard', 'orders', 'customers', 'tasks'], scope_own_records: true })
     load()
     setSaving(false)
   }
@@ -99,7 +103,7 @@ export default function StaffPage() {
   async function savePermissions() {
     if (!permModal) return
     setSaving(true)
-    await supabase.from('users').update({ permissions: permEdit }).eq('id', permModal.id)
+    await supabase.from('users').update({ permissions: permEdit, scope_own_records: scopeEdit }).eq('id', permModal.id)
     setPermModal(null)
     load()
     setSaving(false)
@@ -182,18 +186,15 @@ export default function StaffPage() {
                   <p className="font-semibold text-ink-900 text-sm">{s.full_name}</p>
                   <p className="text-xs text-ink-400 capitalize">{s.role?.replace(/_/g, ' ')} · @{s.username || 'no username'}</p>
                   {s.phone && <p className="text-xs text-ink-400">{s.phone}</p>}
-                  {s.permissions?.length > 0 && (
-                    <p className="text-xs text-brand-600 mt-0.5">
-                      Access: {s.permissions.join(', ')}
-                    </p>
-                  )}
+                  {s.permissions?.length > 0 && <p className="text-xs text-brand-600 mt-0.5">Access: {s.permissions.join(', ')}</p>}
                   {s.permissions?.length === 0 && <p className="text-xs text-green-600 mt-0.5">Full access</p>}
+                  <p className={`text-xs mt-0.5 font-medium ${s.scope_own_records ? 'text-amber-600' : 'text-ink-400'}`}>
+                    {s.scope_own_records ? '🔒 Sees only own records' : '🔓 Sees all business records'}
+                  </p>
                 </div>
               </div>
               <div className="flex-shrink-0">
-                {s.auth_id
-                  ? <span className="badge bg-green-50 text-green-700">Login set</span>
-                  : <span className="badge bg-amber-50 text-amber-700">No login</span>}
+                {s.auth_id ? <span className="badge bg-green-50 text-green-700">Login set</span> : <span className="badge bg-amber-50 text-amber-700">No login</span>}
               </div>
             </div>
             <div className="flex gap-2 mt-3 pt-3 border-t border-surface-100 flex-wrap">
@@ -203,7 +204,7 @@ export default function StaffPage() {
                 {s.auth_id ? 'Update Credentials' : 'Set Login'}
               </button>
               <button
-                onClick={() => { setPermModal(s); setPermEdit(s.permissions || []) }}
+                onClick={() => { setPermModal(s); setPermEdit(s.permissions || []); setScopeEdit(s.scope_own_records !== false) }}
                 className="text-xs px-3 py-1.5 rounded-lg bg-surface-100 text-ink-700 font-medium hover:bg-surface-200">
                 Edit Access
               </button>
@@ -281,6 +282,26 @@ export default function StaffPage() {
                 </p>
               </div>
 
+              {/* Data Scope toggle */}
+              <div className="bg-amber-50 border border-amber-100 rounded-xl p-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-semibold text-ink-900">Restrict to own records only</p>
+                    <p className="text-xs text-ink-500 mt-0.5">
+                      {form.scope_own_records
+                        ? 'They will only see orders, customers and tasks assigned to or created by them.'
+                        : 'They will see all business orders, customers and tasks — not just their own.'}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setForm(f => ({ ...f, scope_own_records: !f.scope_own_records }))}
+                    className={`w-11 h-6 rounded-full transition-colors relative flex-shrink-0 ml-3 ${form.scope_own_records ? 'bg-amber-500' : 'bg-surface-300'}`}>
+                    <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white transition-transform ${form.scope_own_records ? 'translate-x-5' : 'translate-x-0.5'}`} />
+                  </button>
+                </div>
+              </div>
+
               {error && <p className="text-sm text-danger bg-red-50 px-3 py-2 rounded-xl">{error}</p>}
               <div className="flex gap-3 pt-2">
                 <button onClick={() => { setShowForm(false); setError('') }} className="btn-secondary flex-1">Cancel</button>
@@ -294,14 +315,14 @@ export default function StaffPage() {
       {/* Edit Permissions Modal */}
       {permModal && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl w-full max-w-md shadow-panel p-5 space-y-4">
+          <div className="bg-white rounded-2xl w-full max-w-md shadow-panel p-5 space-y-4 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between">
               <h3 className="font-semibold text-ink-900">Edit Access — {permModal.full_name}</h3>
               <button onClick={() => setPermModal(null)} className="text-ink-300 text-xl">✕</button>
             </div>
             <div className="flex gap-2 flex-wrap">
               {PERMISSION_PRESETS.map(p => (
-                <button key={p.label} type="button" onClick={() => setPermEdit(p.permissions)}
+                <button key={p.label} type="button" onClick={() => { setPermEdit(p.permissions); setScopeEdit(p.scoped) }}
                   className="text-xs px-2.5 py-1 rounded-lg bg-brand-50 text-brand-700 font-medium hover:bg-brand-100">
                   {p.label}
                 </button>
@@ -316,9 +337,24 @@ export default function StaffPage() {
                 </button>
               ))}
             </div>
-            <p className="text-xs text-ink-400">
-              {permEdit.length === 0 ? 'Full access to everything' : `${permEdit.length} pages selected`}
-            </p>
+            <p className="text-xs text-ink-400">{permEdit.length === 0 ? 'Full access to everything' : `${permEdit.length} pages selected`}</p>
+
+            {/* Scope toggle */}
+            <div className="bg-amber-50 border border-amber-100 rounded-xl p-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-semibold text-ink-900">Restrict to own records only</p>
+                  <p className="text-xs text-ink-500 mt-0.5">
+                    {scopeEdit ? 'Only sees orders/customers/tasks assigned to or created by them.' : 'Sees all business records.'}
+                  </p>
+                </div>
+                <button type="button" onClick={() => setScopeEdit(s => !s)}
+                  className={`w-11 h-6 rounded-full transition-colors relative flex-shrink-0 ml-3 ${scopeEdit ? 'bg-amber-500' : 'bg-surface-300'}`}>
+                  <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white transition-transform ${scopeEdit ? 'translate-x-5' : 'translate-x-0.5'}`} />
+                </button>
+              </div>
+            </div>
+
             <div className="flex gap-3">
               <button onClick={() => setPermModal(null)} className="btn-secondary flex-1">Cancel</button>
               <button onClick={savePermissions} disabled={saving} className="btn-primary flex-1">{saving ? 'Saving…' : 'Save Access'}</button>

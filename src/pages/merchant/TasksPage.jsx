@@ -8,20 +8,17 @@ const PRIORITY_STYLES = {
   normal: 'bg-blue-50 text-blue-700 border-blue-200',
   low: 'bg-gray-50 text-gray-600 border-gray-200',
 }
-
 const STATUS_STYLES = {
   pending: 'bg-amber-50 text-amber-700',
   in_progress: 'bg-blue-50 text-blue-700',
   completed: 'bg-green-50 text-green-700',
   cancelled: 'bg-gray-100 text-gray-500',
 }
-
 const TYPE_LABELS = {
   follow_up_delivered: '✅ Customer Success Follow-Up',
   follow_up_failed: '❌ Delivery Recovery',
   manual: '📝 Manual Task',
 }
-
 const FILTERS = [
   { key: 'pending', label: 'Pending' },
   { key: 'in_progress', label: 'In Progress' },
@@ -34,7 +31,6 @@ export default function TasksPage() {
   const { profile } = useAuth()
   const [tasks, setTasks] = useState([])
   const [csReps, setCsReps] = useState([])
-  const [products, setProducts] = useState([])
   const [filter, setFilter] = useState('pending')
   const [showForm, setShowForm] = useState(false)
   const [outcomeModal, setOutcomeModal] = useState(null)
@@ -44,21 +40,28 @@ export default function TasksPage() {
   const [saving, setSaving] = useState(false)
   const [loading, setLoading] = useState(true)
 
+  const isScoped = profile?.scope_own_records === true && profile?.role !== 'owner'
+
   useEffect(() => { if (profile?.business_id) load() }, [profile])
 
   async function load() {
     const bid = profile.business_id
-    const [tRes, rRes, pRes] = await Promise.all([
-      supabase.from('tasks')
-        .select('*, users!tasks_assigned_to_fkey(full_name), completed_user:users!tasks_completed_by_fkey(full_name), orders(id, delivery_state, customers(full_name, phone), order_items(product_id, quantity, products(name)))')
-        .eq('merchant_id', bid)
-        .order('due_date', { ascending: true, nullsFirst: false }),
+    let taskQuery = supabase.from('tasks')
+      .select('*, users!tasks_assigned_to_fkey(full_name), completed_user:users!tasks_completed_by_fkey(full_name), orders(id, delivery_state, customers(full_name, phone), order_items(product_id, quantity, products(name)))')
+      .eq('merchant_id', bid)
+      .order('due_date', { ascending: true, nullsFirst: false })
+
+    // Scoped users only see tasks assigned to them
+    if (isScoped) {
+      taskQuery = taskQuery.eq('assigned_to', profile.id)
+    }
+
+    const [tRes, rRes] = await Promise.all([
+      taskQuery,
       supabase.from('users').select('id, full_name').eq('business_id', bid).in('role', ['cs_rep', 'store_manager', 'owner']),
-      supabase.from('products').select('id, name, selling_price, cost_price, delivery_fee').eq('merchant_id', bid).eq('is_active', true),
     ])
     if (tRes.data) setTasks(tRes.data)
     if (rRes.data) setCsReps(rRes.data)
-    if (pRes.data) setProducts(pRes.data)
     setLoading(false)
   }
 
@@ -74,12 +77,9 @@ export default function TasksPage() {
       task: outcomeModal,
       profile,
     })
-
-    // If reorder outcome, open reorder modal
     if (outcomeForm.outcome === 'customer_ready_to_reorder' || outcomeForm.outcome === 'interested_in_another_product') {
       setReorderModal(outcomeModal)
     }
-
     setOutcomeModal(null)
     setOutcomeForm({ outcome: '', notes: '', nextAction: '' })
     load()
@@ -87,11 +87,9 @@ export default function TasksPage() {
   }
 
   async function handleReorder(task) {
-    // Create new order pre-filled with customer and products from original order
     const order = task.orders
     if (!order) return
     setSaving(true)
-
     const items = order.order_items || []
     const totalAmount = items.reduce((s, i) => s + (i.products?.selling_price || 0) * i.quantity, 0)
     const totalFee = items.reduce((s, i) => s + (i.products?.delivery_fee || 0), 0)
@@ -105,6 +103,7 @@ export default function TasksPage() {
       total_amount: totalAmount,
       total_delivery_fee: totalFee,
       notes: `Reorder from task follow-up`,
+      assigned_cs_rep: isScoped ? profile.id : task.assigned_to,
     }).select().single()
 
     if (newOrder && items.length > 0) {
@@ -119,7 +118,6 @@ export default function TasksPage() {
         }))
       )
     }
-
     setReorderModal(null)
     alert(`New order created for ${order.customers?.full_name}! Go to Orders to confirm.`)
     load()
@@ -144,7 +142,7 @@ export default function TasksPage() {
       type: 'manual',
       title: manualForm.title,
       notes: manualForm.notes,
-      assigned_to: manualForm.assigned_to || null,
+      assigned_to: isScoped ? profile.id : (manualForm.assigned_to || null),
       priority: manualForm.priority,
       due_date: manualForm.due_date ? new Date(manualForm.due_date).toISOString() : null,
       created_by: profile.id,
@@ -170,12 +168,11 @@ export default function TasksPage() {
 
   return (
     <div className="space-y-5">
-      {/* Header */}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="page-title">Tasks</h1>
           <p className="text-ink-400 text-sm mt-0.5">
-            {tasks.filter(t => t.status === 'pending').length} pending
+            {tasks.filter(t => t.status === 'pending').length} pending {isScoped ? '(assigned to you)' : ''}
             {overdueCount > 0 && <span className="text-danger ml-2">· {overdueCount} overdue</span>}
             {escalatedCount > 0 && <span className="text-orange-500 ml-2">· {escalatedCount} escalated</span>}
           </p>
@@ -183,7 +180,6 @@ export default function TasksPage() {
         <button onClick={() => setShowForm(true)} className="btn-primary">+ New Task</button>
       </div>
 
-      {/* Summary */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         {[
           { label: 'Pending', count: tasks.filter(t => t.status === 'pending').length, color: 'text-amber-600' },
@@ -198,22 +194,18 @@ export default function TasksPage() {
         ))}
       </div>
 
-      {/* Filters */}
       <div className="flex gap-2 overflow-x-auto pb-1">
         {FILTERS.map(f => (
           <button key={f.key} onClick={() => setFilter(f.key)}
             className={`px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-colors ${filter === f.key ? 'bg-brand-600 text-white' : 'bg-white border border-surface-200 text-ink-500 hover:bg-surface-50'}`}>
             {f.label}
             <span className="ml-1.5 opacity-70">
-              {f.key === 'all' ? tasks.length
-                : f.key === 'escalated' ? escalatedCount
-                : tasks.filter(t => t.status === f.key).length}
+              {f.key === 'all' ? tasks.length : f.key === 'escalated' ? escalatedCount : tasks.filter(t => t.status === f.key).length}
             </span>
           </button>
         ))}
       </div>
 
-      {/* Tasks */}
       <div className="space-y-3">
         {loading ? (
           [...Array(3)].map((_, i) => <div key={i} className="card h-24 animate-pulse bg-surface-100" />)
@@ -233,31 +225,22 @@ export default function TasksPage() {
                   {isEscalated(task) && <span className="badge bg-orange-100 text-orange-700">Escalated</span>}
                   {isOverdue(task) && <span className="badge bg-red-100 text-red-700">Overdue</span>}
                 </div>
-
                 <p className="font-semibold text-ink-900 text-sm">{task.title}</p>
                 {task.notes && <p className="text-xs text-ink-500 mt-1">{task.notes}</p>}
-
-                {/* Linked customer */}
                 {task.orders?.customers && (
                   <div className="mt-2 px-3 py-2 bg-surface-50 rounded-xl">
                     <p className="text-xs text-ink-500">
                       Customer: <span className="font-medium text-ink-700">{task.orders.customers.full_name}</span>
                       {task.orders.customers.phone && (
-                        <a href={`tel:${task.orders.customers.phone}`} className="ml-2 text-brand-600 underline">
-                          {task.orders.customers.phone}
-                        </a>
+                        <a href={`tel:${task.orders.customers.phone}`} className="ml-2 text-brand-600 underline">{task.orders.customers.phone}</a>
                       )}
                     </p>
                     <p className="text-xs text-ink-400 mt-0.5">State: {task.orders.delivery_state}</p>
                     {task.orders.order_items?.length > 0 && (
-                      <p className="text-xs text-ink-400 mt-0.5">
-                        Products: {task.orders.order_items.map(i => `${i.products?.name} x${i.quantity}`).join(', ')}
-                      </p>
+                      <p className="text-xs text-ink-400 mt-0.5">Products: {task.orders.order_items.map(i => `${i.products?.name} x${i.quantity}`).join(', ')}</p>
                     )}
                   </div>
                 )}
-
-                {/* Outcome report */}
                 {task.outcome && (
                   <div className="mt-2 px-3 py-2 bg-green-50 rounded-xl border border-green-100">
                     <p className="text-xs font-semibold text-green-700">Outcome: {TASK_OUTCOMES[task.type]?.find(o => o.value === task.outcome)?.label || task.outcome}</p>
@@ -266,51 +249,35 @@ export default function TasksPage() {
                     {task.completed_user && <p className="text-xs text-ink-400 mt-1">By: {task.completed_user.full_name} · {task.completed_at ? new Date(task.completed_at).toLocaleDateString('en-NG') : ''}</p>}
                   </div>
                 )}
-
-                {/* Escalation info */}
                 {task.escalation_reason && (
                   <div className="mt-2 px-3 py-2 bg-orange-50 rounded-xl border border-orange-100">
                     <p className="text-xs font-semibold text-orange-700">Escalation Reason:</p>
                     <p className="text-xs text-orange-600 mt-0.5">{task.escalation_reason}</p>
                   </div>
                 )}
-
                 <div className="flex items-center gap-3 mt-2 flex-wrap">
                   {task.due_date && (
                     <p className={`text-xs ${isOverdue(task) ? 'text-danger font-medium' : 'text-ink-400'}`}>
                       Due: {new Date(task.due_date).toLocaleDateString('en-NG')}
                     </p>
                   )}
-                  <p className="text-xs text-ink-400">
-                    Assigned: <span className="font-medium text-ink-600">{task.users?.full_name || 'Unassigned'}</span>
-                  </p>
+                  <p className="text-xs text-ink-400">Assigned: <span className="font-medium text-ink-600">{task.users?.full_name || 'Unassigned'}</span></p>
                 </div>
               </div>
-
-              <span className={`badge flex-shrink-0 ${STATUS_STYLES[task.status]}`}>
-                {task.status.replace('_', ' ')}
-              </span>
+              <span className={`badge flex-shrink-0 ${STATUS_STYLES[task.status]}`}>{task.status.replace('_', ' ')}</span>
             </div>
 
-            {/* Actions */}
             {task.status !== 'completed' && task.status !== 'cancelled' && (
               <div className="flex gap-2 mt-4 flex-wrap items-center border-t border-surface-100 pt-3">
-                <button
-                  onClick={() => { setOutcomeModal(task); setOutcomeForm({ outcome: '', notes: '', nextAction: '' }) }}
-                  className="text-xs px-3 py-1.5 rounded-lg bg-brand-50 text-brand-700 font-medium hover:bg-brand-100">
-                  Log Outcome
-                </button>
+                <button onClick={() => { setOutcomeModal(task); setOutcomeForm({ outcome: '', notes: '', nextAction: '' }) }}
+                  className="text-xs px-3 py-1.5 rounded-lg bg-brand-50 text-brand-700 font-medium hover:bg-brand-100">Log Outcome</button>
                 {task.status === 'pending' && (
                   <button onClick={() => updateTaskStatus(task.id, 'in_progress')}
-                    className="text-xs px-3 py-1.5 rounded-lg bg-blue-50 text-blue-700 font-medium hover:bg-blue-100">
-                    Start
-                  </button>
+                    className="text-xs px-3 py-1.5 rounded-lg bg-blue-50 text-blue-700 font-medium hover:bg-blue-100">Start</button>
                 )}
                 <button onClick={() => updateTaskStatus(task.id, 'cancelled')}
-                  className="text-xs px-3 py-1.5 rounded-lg bg-gray-50 text-gray-500 font-medium hover:bg-gray-100">
-                  Cancel
-                </button>
-                {csReps.length > 0 && (
+                  className="text-xs px-3 py-1.5 rounded-lg bg-gray-50 text-gray-500 font-medium hover:bg-gray-100">Cancel</button>
+                {csReps.length > 0 && !isScoped && (
                   <select onChange={e => reassign(task.id, e.target.value)} value={task.assigned_to || ''}
                     className="text-xs px-2 py-1.5 rounded-lg border border-surface-300 bg-white text-ink-700 ml-auto">
                     <option value="">Reassign…</option>
@@ -340,8 +307,7 @@ export default function TasksPage() {
                 <label className="label">Outcome</label>
                 <div className="space-y-2">
                   {(TASK_OUTCOMES[outcomeModal.type] || TASK_OUTCOMES.manual).map(o => (
-                    <button key={o.value} type="button"
-                      onClick={() => setOutcomeForm(f => ({ ...f, outcome: o.value }))}
+                    <button key={o.value} type="button" onClick={() => setOutcomeForm(f => ({ ...f, outcome: o.value }))}
                       className={`w-full text-left px-4 py-3 rounded-xl border text-sm font-medium transition-colors ${outcomeForm.outcome === o.value ? 'bg-brand-600 text-white border-brand-600' : 'bg-white border-surface-200 text-ink-700 hover:bg-surface-50'}`}>
                       {o.label}
                     </button>
@@ -350,27 +316,22 @@ export default function TasksPage() {
               </div>
               <div>
                 <label className="label">Notes <span className="text-ink-300 font-normal normal-case">(required)</span></label>
-                <textarea className="input" rows={3} value={outcomeForm.notes}
-                  onChange={e => setOutcomeForm(f => ({ ...f, notes: e.target.value }))}
-                  placeholder="What happened during this follow-up? Be specific…" />
+                <textarea className="input" rows={3} value={outcomeForm.notes} onChange={e => setOutcomeForm(f => ({ ...f, notes: e.target.value }))} placeholder="What happened during this follow-up? Be specific…" />
               </div>
               <div>
                 <label className="label">Next Action <span className="text-ink-300 font-normal normal-case">(optional)</span></label>
-                <input className="input" value={outcomeForm.nextAction}
-                  onChange={e => setOutcomeForm(f => ({ ...f, nextAction: e.target.value }))}
-                  placeholder="What should happen next?" />
+                <input className="input" value={outcomeForm.nextAction} onChange={e => setOutcomeForm(f => ({ ...f, nextAction: e.target.value }))} placeholder="What should happen next?" />
               </div>
               <div className="flex gap-3 pt-2">
                 <button onClick={() => setOutcomeModal(null)} className="btn-secondary flex-1">Cancel</button>
-                <button onClick={handleOutcomeSubmit} disabled={saving || !outcomeForm.outcome || !outcomeForm.notes}
-                  className="btn-primary flex-1">{saving ? 'Saving…' : 'Submit Outcome'}</button>
+                <button onClick={handleOutcomeSubmit} disabled={saving || !outcomeForm.outcome || !outcomeForm.notes} className="btn-primary flex-1">{saving ? 'Saving…' : 'Submit Outcome'}</button>
               </div>
             </div>
           </div>
         </div>
       )}
 
-      {/* Reorder Confirmation Modal */}
+      {/* Reorder Modal */}
       {reorderModal && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl w-full max-w-sm shadow-panel p-5 space-y-4">
@@ -380,17 +341,13 @@ export default function TasksPage() {
               <p className="text-xs text-ink-500">Phone: {reorderModal.orders?.customers?.phone}</p>
               <p className="text-xs text-ink-500">State: {reorderModal.orders?.delivery_state}</p>
               {reorderModal.orders?.order_items?.map(i => (
-                <p key={i.product_id} className="text-xs text-ink-500">
-                  {i.products?.name} x{i.quantity} — ₦{Number(i.products?.selling_price * i.quantity).toLocaleString()}
-                </p>
+                <p key={i.product_id} className="text-xs text-ink-500">{i.products?.name} x{i.quantity} — ₦{Number(i.products?.selling_price * i.quantity).toLocaleString()}</p>
               ))}
             </div>
             <p className="text-sm text-ink-500">This will create a new order pre-filled with the same customer and products. You can edit it before confirming.</p>
             <div className="flex gap-3">
               <button onClick={() => setReorderModal(null)} className="btn-secondary flex-1">Cancel</button>
-              <button onClick={() => handleReorder(reorderModal)} disabled={saving} className="btn-primary flex-1">
-                {saving ? 'Creating…' : 'Create Order'}
-              </button>
+              <button onClick={() => handleReorder(reorderModal)} disabled={saving} className="btn-primary flex-1">{saving ? 'Creating…' : 'Create Order'}</button>
             </div>
           </div>
         </div>
@@ -413,13 +370,15 @@ export default function TasksPage() {
                 <label className="label">Notes</label>
                 <textarea className="input" rows={2} value={manualForm.notes} onChange={e => setManualForm(f => ({...f, notes: e.target.value}))} placeholder="Additional context…" />
               </div>
-              <div>
-                <label className="label">Assign To</label>
-                <select className="input" value={manualForm.assigned_to} onChange={e => setManualForm(f => ({...f, assigned_to: e.target.value}))}>
-                  <option value="">Select staff</option>
-                  {csReps.map(r => <option key={r.id} value={r.id}>{r.full_name}</option>)}
-                </select>
-              </div>
+              {!isScoped && (
+                <div>
+                  <label className="label">Assign To</label>
+                  <select className="input" value={manualForm.assigned_to} onChange={e => setManualForm(f => ({...f, assigned_to: e.target.value}))}>
+                    <option value="">Select staff</option>
+                    {csReps.map(r => <option key={r.id} value={r.id}>{r.full_name}</option>)}
+                  </select>
+                </div>
+              )}
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="label">Priority</label>

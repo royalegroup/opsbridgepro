@@ -22,13 +22,28 @@ export default function OrdersPage() {
   const [form, setForm] = useState({ customer_id: '', product_id: '', quantity: 1, delivery_state: '', source: 'manual', notes: '' })
   const [saving, setSaving] = useState(false)
 
+  // Data scope: if scope_own_records is true, this user only sees their own assigned orders
+  const isScoped = profile?.scope_own_records === true && profile?.role !== 'owner'
+
   useEffect(() => { if (profile?.business_id) loadAll() }, [profile])
 
   async function loadAll() {
     const bid = profile.business_id
+    let orderQuery = supabase.from('orders').select('*, customers(full_name, phone), users(full_name)').eq('merchant_id', bid).order('created_at', { ascending: false })
+
+    // Apply scope restriction — scoped users only see orders assigned to them
+    if (isScoped) {
+      orderQuery = orderQuery.eq('assigned_cs_rep', profile.id)
+    }
+
+    let customerQuery = supabase.from('customers').select('id, full_name, phone').eq('merchant_id', bid)
+    if (isScoped) {
+      customerQuery = customerQuery.eq('created_by', profile.id)
+    }
+
     const [ordersRes, cusRes, prodRes, repsRes] = await Promise.all([
-      supabase.from('orders').select('*, customers(full_name, phone), users(full_name)').eq('merchant_id', bid).order('created_at', { ascending: false }),
-      supabase.from('customers').select('id, full_name, phone').eq('merchant_id', bid),
+      orderQuery,
+      customerQuery,
       supabase.from('products').select('id, name, selling_price, delivery_fee, cost_price').eq('merchant_id', bid).eq('is_active', true),
       supabase.from('users').select('id, full_name').eq('business_id', bid).eq('role', 'cs_rep'),
     ])
@@ -56,7 +71,9 @@ export default function OrdersPage() {
       notes: form.notes,
       total_amount: total,
       total_delivery_fee: fee,
-      status: 'new'
+      status: 'new',
+      // If the creator is scoped, auto-assign the order to themselves
+      assigned_cs_rep: isScoped ? profile.id : null,
     }).select().single()
 
     if (!error && orderData) {
@@ -78,11 +95,19 @@ export default function OrdersPage() {
   async function updateStatus(orderId, status) {
     await supabase.from('orders').update({ status }).eq('id', orderId)
 
-    const order = orders.find(o => o.id === orderId)
+    const { data: order } = await supabase
+      .from('orders')
+      .select('*, customers(full_name, phone)')
+      .eq('id', orderId)
+      .single()
 
-    // If confirmed, auto-create logistics request
-    if (status === 'confirmed') {
-      const link = await supabase.from('merchant_logistics_links').select('logistics_id').eq('merchant_id', profile.business_id).eq('is_active', true).single()
+    if (status === 'confirmed' && order) {
+      const link = await supabase
+        .from('merchant_logistics_links')
+        .select('logistics_id')
+        .eq('merchant_id', profile.business_id)
+        .eq('is_active', true)
+        .single()
       if (link.data) {
         await supabase.from('logistics_requests').insert({
           order_id: orderId,
@@ -95,7 +120,6 @@ export default function OrdersPage() {
       }
     }
 
-    // Auto-create follow-up task on delivered or failed
     if ((status === 'delivered' || status === 'failed') && order) {
       await createFollowUpTask(order, status, profile.business_id)
     }
@@ -113,7 +137,9 @@ export default function OrdersPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="page-title">Orders</h1>
-          <p className="text-ink-400 text-sm mt-0.5">{orders.length} total orders</p>
+          <p className="text-ink-400 text-sm mt-0.5">
+            {orders.length} {isScoped ? 'orders assigned to you' : 'total orders'}
+          </p>
         </div>
         <button onClick={() => setShowForm(true)} className="btn-primary">+ New Order</button>
       </div>
@@ -162,7 +188,7 @@ export default function OrdersPage() {
                 {/* Actions */}
                 {(order.status === 'new' || order.status === 'assigned') && (
                   <div className="flex gap-2 mt-3 flex-wrap">
-                    {order.status === 'new' && csReps.length > 0 && (
+                    {order.status === 'new' && csReps.length > 0 && !isScoped && (
                       <select onChange={e => assignRep(order.id, e.target.value)} defaultValue=""
                         className="text-xs px-2 py-1.5 rounded-lg border border-surface-300 bg-white text-ink-700">
                         <option value="" disabled>Assign CS Rep</option>
