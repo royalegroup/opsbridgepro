@@ -7,6 +7,7 @@ const MERCHANT_NAV = [
   { label: 'Tasks', icon: '✓', page: 'tasks' },
   { label: 'Customers', icon: '◉', page: 'customers' },
   { label: 'Blocked', icon: '🚫', page: 'blocked_customers' },
+  { label: 'Marketing', icon: '📣', page: 'marketing' },
   { label: 'Products', icon: '▣', page: 'products' },
   { label: 'Bundles', icon: '📦', page: 'bundles' },
   { label: 'Stock', icon: '⬡', page: 'stock' },

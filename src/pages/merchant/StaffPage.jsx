@@ -13,6 +13,7 @@ const MERCHANT_PAGES = [
   { key: 'stock', label: 'Stock' },
   { key: 'finance', label: 'Finance' },
   { key: 'expenses', label: 'Expenses' },
+  { key: 'marketing', label: 'Marketing' },
   { key: 'staff', label: 'Staff' },
   { key: 'reports', label: 'Reports' },
 ]
@@ -21,7 +22,7 @@ const PERMISSION_PRESETS = [
   { label: 'CS Rep', permissions: ['dashboard', 'orders', 'customers', 'tasks'], scoped: true },
   { label: 'Store Manager', permissions: ['dashboard', 'orders', 'customers', 'products', 'stock', 'tasks', 'staff'], scoped: false },
   { label: 'Finance Officer', permissions: ['dashboard', 'finance', 'expenses', 'reports'], scoped: false },
-  { label: 'Marketing Manager', permissions: ['dashboard', 'products', 'bundles', 'orders', 'reports', 'expenses'], scoped: false, isMarketing: true },
+  { label: 'Marketing Manager', permissions: ['dashboard', 'products', 'bundles', 'orders', 'reports', 'expenses', 'marketing'], scoped: false, isMarketing: true },
   { label: 'Full Access', permissions: [], scoped: false },
 ]
 

@@ -22,41 +22,36 @@ const PERIODS = [
 export default function ExpensesPage() {
   const { profile } = useAuth()
   const [expenses, setExpenses] = useState([])
+  const [campaigns, setCampaigns] = useState([])
   const [showForm, setShowForm] = useState(false)
   const [period, setPeriod] = useState('month')
   const [categoryFilter, setCategoryFilter] = useState('all')
-  const [form, setForm] = useState({ category: 'ads', custom_category: '', description: '', amount: '', expense_date: new Date().toISOString().split('T')[0] })
+  const [form, setForm] = useState({ category: 'ads', custom_category: '', description: '', amount: '', expense_date: new Date().toISOString().split('T')[0], campaign_id: '' })
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
   useEffect(() => { if (profile?.business_id) load() }, [profile])
 
   async function load() {
-    const { data } = await supabase
-      .from('expenses')
-      .select('*, users(full_name)')
-      .eq('merchant_id', profile.business_id)
-      .order('expense_date', { ascending: false })
-    if (data) setExpenses(data)
+    const [eRes, cRes] = await Promise.all([
+      supabase.from('expenses').select('*, users(full_name), campaigns(name)').eq('merchant_id', profile.business_id).order('expense_date', { ascending: false }),
+      supabase.from('campaigns').select('id, name').eq('merchant_id', profile.business_id).eq('is_active', true),
+    ])
+    if (eRes.data) setExpenses(eRes.data)
+    if (cRes.data) setCampaigns(cRes.data)
   }
 
   function filterByPeriod(exp) {
     const date = new Date(exp.expense_date)
     const now = new Date()
-    if (period === 'today') {
-      return date.toDateString() === now.toDateString()
-    } else if (period === 'week') {
-      const weekAgo = new Date(); weekAgo.setDate(weekAgo.getDate() - 7)
-      return date >= weekAgo
-    } else if (period === 'month') {
-      return date.getMonth() === now.getMonth() && date.getFullYear() === now.getFullYear()
-    }
+    if (period === 'today') return date.toDateString() === now.toDateString()
+    if (period === 'week') { const weekAgo = new Date(); weekAgo.setDate(weekAgo.getDate() - 7); return date >= weekAgo }
+    if (period === 'month') return date.getMonth() === now.getMonth() && date.getFullYear() === now.getFullYear()
     return true
   }
 
   const periodFiltered = expenses.filter(filterByPeriod)
   const filtered = categoryFilter === 'all' ? periodFiltered : periodFiltered.filter(e => e.category === categoryFilter)
-
   const totalExpenses = periodFiltered.reduce((s, e) => s + +e.amount, 0)
 
   const byCategory = CATEGORIES.map(cat => ({
@@ -78,12 +73,13 @@ export default function ExpensesPage() {
       description: form.description,
       amount: +form.amount,
       expense_date: form.expense_date,
+      campaign_id: form.category === 'ads' && form.campaign_id ? form.campaign_id : null,
     })
 
     if (insertError) { setError(insertError.message); setSaving(false); return }
 
     setShowForm(false)
-    setForm({ category: 'ads', custom_category: '', description: '', amount: '', expense_date: new Date().toISOString().split('T')[0] })
+    setForm({ category: 'ads', custom_category: '', description: '', amount: '', expense_date: new Date().toISOString().split('T')[0], campaign_id: '' })
     load()
     setSaving(false)
   }
@@ -106,7 +102,6 @@ export default function ExpensesPage() {
         <button onClick={() => setShowForm(true)} className="btn-primary">+ Record Expense</button>
       </div>
 
-      {/* Period filter */}
       <div className="flex gap-2 overflow-x-auto pb-1">
         {PERIODS.map(p => (
           <button key={p.key} onClick={() => setPeriod(p.key)}
@@ -116,7 +111,6 @@ export default function ExpensesPage() {
         ))}
       </div>
 
-      {/* Summary */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard label="Total Expenses" value={`₦${totalExpenses.toLocaleString()}`} icon="◆" color="danger" />
         {byCategory.slice(0, 3).map(cat => (
@@ -124,7 +118,6 @@ export default function ExpensesPage() {
         ))}
       </div>
 
-      {/* Category breakdown */}
       {byCategory.length > 0 && (
         <div className="card">
           <h2 className="font-semibold text-ink-900 mb-4">Breakdown by Category</h2>
@@ -148,7 +141,6 @@ export default function ExpensesPage() {
         </div>
       )}
 
-      {/* Category filter */}
       <div className="flex gap-2 overflow-x-auto pb-1">
         <button onClick={() => setCategoryFilter('all')}
           className={`px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-colors ${categoryFilter === 'all' ? 'bg-brand-600 text-white' : 'bg-white border border-surface-200 text-ink-500'}`}>
@@ -166,7 +158,6 @@ export default function ExpensesPage() {
         })}
       </div>
 
-      {/* Expenses list */}
       <div className="card p-0 overflow-hidden">
         {filtered.length === 0 ? (
           <div className="p-12 text-center">
@@ -185,6 +176,7 @@ export default function ExpensesPage() {
                     <p className="font-medium text-ink-900 text-sm">{e.description}</p>
                     <p className="text-xs text-ink-400 mt-0.5">
                       {e.category === 'custom' ? e.custom_category : cat.label}
+                      {e.campaigns?.name && ` · Campaign: ${e.campaigns.name}`}
                       {e.users?.full_name && ` · ${e.users.full_name}`}
                       {` · ${new Date(e.expense_date).toLocaleDateString('en-NG')}`}
                     </p>
@@ -202,7 +194,6 @@ export default function ExpensesPage() {
         )}
       </div>
 
-      {/* Add Expense Modal */}
       {showForm && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center p-4">
           <div className="bg-white rounded-2xl w-full max-w-md shadow-panel max-h-[90vh] overflow-y-auto">
@@ -228,6 +219,19 @@ export default function ExpensesPage() {
                 <div>
                   <label className="label">Custom Category Name</label>
                   <input className="input" value={form.custom_category} onChange={e => setForm(f => ({...f, custom_category: e.target.value}))} placeholder="e.g. Packaging, Generator fuel" />
+                </div>
+              )}
+
+              {form.category === 'ads' && (
+                <div className="bg-purple-50 border border-purple-100 rounded-xl p-3">
+                  <label className="label">Campaign <span className="text-ink-400 font-normal normal-case">(links this spend to Marketing reporting)</span></label>
+                  <select className="input" value={form.campaign_id} onChange={e => setForm(f => ({...f, campaign_id: e.target.value}))}>
+                    <option value="">No campaign selected</option>
+                    {campaigns.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                  </select>
+                  {campaigns.length === 0 && (
+                    <p className="text-xs text-purple-600 mt-2">No campaigns yet — create one under Marketing → Campaigns to track ROAS. You can still log this spend without one.</p>
+                  )}
                 </div>
               )}
 

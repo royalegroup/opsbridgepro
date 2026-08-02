@@ -17,6 +17,7 @@ import ReportsPage from './pages/merchant/ReportsPage'
 import TasksPage from './pages/merchant/TasksPage'
 import StaffPage from './pages/merchant/StaffPage'
 import BlockedCustomersPage from './pages/merchant/BlockedCustomersPage'
+import MarketingPage from './pages/merchant/MarketingPage'
 
 // Logistics pages
 import LogisticsDashboard from './pages/logistics/LogisticsDashboard'
@@ -44,6 +45,7 @@ const MERCHANT_PAGES = {
   tasks: TasksPage,
   staff: StaffPage,
   blocked_customers: BlockedCustomersPage,
+  marketing: MarketingPage,
 }
 
 const LOGISTICS_PAGES = {
