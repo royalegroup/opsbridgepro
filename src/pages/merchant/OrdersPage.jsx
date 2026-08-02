@@ -26,11 +26,15 @@ export default function OrdersPage() {
   const [deleteError, setDeleteError] = useState('')
   const [form, setForm] = useState({ customer_id: '', product_id: '', quantity: 1, delivery_state: '', source: 'manual', notes: '' })
   const [saving, setSaving] = useState(false)
+  const [blockWarning, setBlockWarning] = useState(null)
+  const [overrideBlock, setOverrideBlock] = useState(false)
 
   const isScoped = profile?.scope_own_records === true && profile?.role !== 'owner'
   // Only owners and non-scoped staff can create brand-new orders/customers.
   // Scoped staff (e.g. CS Reps) only work records already assigned to them.
   const canCreate = !isScoped
+  // Scoped staff (e.g. CS Reps) cannot override a blocklist match — only managers/owners can
+  const canOverrideBlock = !isScoped
 
   useEffect(() => { if (profile?.business_id) loadAll() }, [profile])
 
@@ -60,7 +64,26 @@ export default function OrdersPage() {
   function openNew() {
     setEditOrder(null)
     setForm({ customer_id: '', product_id: '', quantity: 1, delivery_state: '', source: 'manual', notes: '' })
+    setBlockWarning(null)
+    setOverrideBlock(false)
     setShowForm(true)
+  }
+
+  // Check the selected customer against the merchant's blocklist by phone match
+  async function checkBlocklist(customerId) {
+    setBlockWarning(null)
+    setOverrideBlock(false)
+    const customer = customers.find(c => c.id === customerId)
+    if (!customer?.phone) return
+
+    const { data } = await supabase
+      .from('blocked_customers')
+      .select('*')
+      .eq('merchant_id', profile.business_id)
+      .eq('phone', customer.phone)
+      .maybeSingle()
+
+    if (data) setBlockWarning(data)
   }
 
   async function openEdit(order) {
@@ -76,11 +99,14 @@ export default function OrdersPage() {
       source: order.source || 'manual',
       notes: order.notes || '',
     })
+    checkBlocklist(order.customer_id)
     setShowForm(true)
   }
 
   async function saveOrder() {
     if (!form.customer_id || !form.product_id || !form.delivery_state) return
+    // Refuse to submit if the customer is blocklisted and not overridden by an authorized user
+    if (blockWarning && !overrideBlock) return
     setSaving(true)
     const product = products.find(p => p.id === form.product_id)
     const total = product ? product.selling_price * form.quantity : 0
@@ -286,11 +312,26 @@ export default function OrdersPage() {
             <div className="p-5 space-y-4">
               <div>
                 <label className="label">Customer</label>
-                <select className="input" value={form.customer_id} onChange={e => setForm(f => ({ ...f, customer_id: e.target.value }))}>
+                <select className="input" value={form.customer_id} onChange={e => { setForm(f => ({ ...f, customer_id: e.target.value })); checkBlocklist(e.target.value) }}>
                   <option value="">Select customer</option>
                   {customers.map(c => <option key={c.id} value={c.id}>{c.full_name} — {c.phone}</option>)}
                 </select>
               </div>
+
+              {blockWarning && (
+                <div className="bg-red-50 border border-red-200 rounded-xl p-3 space-y-2">
+                  <p className="text-sm font-bold text-red-700">🚫 This customer is blocklisted</p>
+                  <p className="text-xs text-red-600"><span className="font-semibold">Reason:</span> {blockWarning.reason}</p>
+                  {canOverrideBlock ? (
+                    <label className="flex items-center gap-2 text-xs text-red-700 font-medium pt-1">
+                      <input type="checkbox" checked={overrideBlock} onChange={e => setOverrideBlock(e.target.checked)} />
+                      I understand the risk — proceed with this order anyway
+                    </label>
+                  ) : (
+                    <p className="text-xs text-red-500 font-medium pt-1">Only a manager or owner can override this and proceed.</p>
+                  )}
+                </div>
+              )}
               <div>
                 <label className="label">Product</label>
                 <select className="input" value={form.product_id} onChange={e => setForm(f => ({ ...f, product_id: e.target.value }))}>
@@ -326,7 +367,7 @@ export default function OrdersPage() {
               </div>
               <div className="flex gap-3 pt-2">
                 <button onClick={() => setShowForm(false)} className="btn-secondary flex-1">Cancel</button>
-                <button onClick={saveOrder} disabled={saving} className="btn-primary flex-1">{saving ? 'Saving…' : editOrder ? 'Save Changes' : 'Create Order'}</button>
+                <button onClick={saveOrder} disabled={saving || (blockWarning && !overrideBlock)} className="btn-primary flex-1">{saving ? 'Saving…' : blockWarning && !overrideBlock ? 'Blocked' : editOrder ? 'Save Changes' : 'Create Order'}</button>
               </div>
             </div>
           </div>

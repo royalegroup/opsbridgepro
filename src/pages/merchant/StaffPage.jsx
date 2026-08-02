@@ -7,6 +7,7 @@ const MERCHANT_PAGES = [
   { key: 'orders', label: 'Orders' },
   { key: 'tasks', label: 'Tasks' },
   { key: 'customers', label: 'Customers' },
+  { key: 'blocked_customers', label: 'Blocked' },
   { key: 'products', label: 'Products' },
   { key: 'bundles', label: 'Bundles' },
   { key: 'stock', label: 'Stock' },
