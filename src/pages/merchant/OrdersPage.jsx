@@ -4,6 +4,7 @@ import { useAuth } from '../../contexts/AuthContext'
 import Badge from '../../components/shared/Badge'
 import { createFollowUpTask } from '../../lib/taskHelpers'
 import ReceiptModal from '../../components/merchant/ReceiptModal'
+import { exportOrdersToCSV } from '../../lib/csvExport'
 
 const STATUSES = ['all', 'new', 'assigned', 'confirmed', 'sent_to_logistics', 'in_transit', 'delivered', 'failed', 'cancelled']
 const NIGERIAN_STATES = ['Abia','Adamawa','Akwa Ibom','Anambra','Bauchi','Bayelsa','Benue','Borno','Cross River','Delta','Ebonyi','Edo','Ekiti','Enugu','FCT','Gombe','Imo','Jigawa','Kaduna','Kano','Katsina','Kebbi','Kogi','Kwara','Lagos','Nasarawa','Niger','Ogun','Ondo','Osun','Oyo','Plateau','Rivers','Sokoto','Taraba','Yobe','Zamfara']
@@ -26,6 +27,7 @@ export default function OrdersPage() {
   const [deleteError, setDeleteError] = useState('')
   const [form, setForm] = useState({ customer_id: '', product_id: '', quantity: 1, delivery_state: '', source: 'manual', notes: '' })
   const [saving, setSaving] = useState(false)
+  const [exportOpen, setExportOpen] = useState(false)
   const [blockWarning, setBlockWarning] = useState(null)
   const [overrideBlock, setOverrideBlock] = useState(false)
 
@@ -203,14 +205,47 @@ export default function OrdersPage() {
     loadAll()
   }
 
+  function handleExportCurrentView() {
+    const stamp = new Date().toISOString().split('T')[0]
+    const label = filter === 'all' ? 'all-visible' : filter
+    exportOrdersToCSV(filtered, `orders-${label}-${stamp}.csv`)
+    setExportOpen(false)
+  }
+
+  function handleExportAll() {
+    const stamp = new Date().toISOString().split('T')[0]
+    exportOrdersToCSV(orders, `orders-all-${stamp}.csv`)
+    setExportOpen(false)
+  }
+
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-2">
         <div>
           <h1 className="page-title">Orders</h1>
           <p className="text-ink-400 text-sm mt-0.5">{orders.length} {isScoped ? 'orders assigned to you' : 'total orders'}</p>
         </div>
-        {canCreate && <button onClick={openNew} className="btn-primary">+ New Order</button>}
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="relative">
+            <button onClick={() => setExportOpen(o => !o)} className="btn-secondary text-sm">⬇️ Export</button>
+            {exportOpen && (
+              <>
+                <div className="fixed inset-0 z-10" onClick={() => setExportOpen(false)} />
+                <div className="absolute right-0 mt-1 w-56 bg-white rounded-xl shadow-panel border border-surface-200 py-1.5 z-20">
+                  <button onClick={handleExportCurrentView} className="w-full text-left px-4 py-2.5 text-sm text-ink-700 hover:bg-surface-50">
+                    Export Current View
+                    <p className="text-xs text-ink-400 mt-0.5">{filtered.length} order{filtered.length !== 1 ? 's' : ''} visible now</p>
+                  </button>
+                  <button onClick={handleExportAll} className="w-full text-left px-4 py-2.5 text-sm text-ink-700 hover:bg-surface-50 border-t border-surface-100">
+                    Export All Orders
+                    <p className="text-xs text-ink-400 mt-0.5">{orders.length} total order{orders.length !== 1 ? 's' : ''}</p>
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+          {canCreate && <button onClick={openNew} className="btn-primary">+ New Order</button>}
+        </div>
       </div>
 
       <div className="flex gap-2 overflow-x-auto pb-1">
