@@ -9,13 +9,13 @@ import MerchantDashboard from './pages/merchant/MerchantDashboard'
 import OrdersPage from './pages/merchant/OrdersPage'
 import CustomersPage from './pages/merchant/CustomersPage'
 import ProductsPage from './pages/merchant/ProductsPage'
+import BundlesPage from './pages/merchant/BundlesPage'
 import StockPage from './pages/merchant/StockPage'
 import FinancePage from './pages/merchant/FinancePage'
+import ExpensesPage from './pages/merchant/ExpensesPage'
 import ReportsPage from './pages/merchant/ReportsPage'
 import TasksPage from './pages/merchant/TasksPage'
 import StaffPage from './pages/merchant/StaffPage'
-import BundlesPage from './pages/merchant/BundlesPage'
-import ExpensesPage from './pages/merchant/ExpensesPage'
 
 // Logistics pages
 import LogisticsDashboard from './pages/logistics/LogisticsDashboard'
@@ -25,6 +25,7 @@ import StockManagementPage from './pages/logistics/StockManagementPage'
 import CODPage from './pages/logistics/CODPage'
 import MerchantsPage from './pages/logistics/MerchantsPage'
 import LogisticsReportsPage from './pages/logistics/LogisticsReportsPage'
+import RoyaleStaffPage from './pages/logistics/RoyaleStaffPage'
 
 // Agent view
 import AgentView from './pages/agent/AgentView'
@@ -51,6 +52,7 @@ const LOGISTICS_PAGES = {
   deliveries: RequestsPage,
   cod: CODPage,
   merchants: MerchantsPage,
+  royale_staff: RoyaleStaffPage,
   reports: LogisticsReportsPage,
 }
 
@@ -71,10 +73,8 @@ function AppContent() {
 
   if (!session) return <LoginPage />
 
-  // Agent gets their own mobile-optimised view
   if (profile?.role === 'agent') return <AgentView />
 
-  // No profile linked — show error with sign out option
   if (!profile) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-surface-50 p-4">
@@ -82,12 +82,7 @@ function AppContent() {
           <p className="text-3xl mb-3">⚠</p>
           <h2 className="font-bold text-ink-900 mb-2">Account not set up</h2>
           <p className="text-sm text-ink-500 mb-5">Your account hasn't been linked to a business yet. Contact your administrator.</p>
-          <button
-            onClick={() => supabase.auth.signOut()}
-            className="btn-secondary w-full"
-          >
-            ← Sign out and try again
-          </button>
+          <button onClick={() => supabase.auth.signOut()} className="btn-secondary w-full">← Sign out and try again</button>
         </div>
       </div>
     )

@@ -41,6 +41,8 @@ export default function TasksPage() {
   const [loading, setLoading] = useState(true)
 
   const isScoped = profile?.scope_own_records === true && profile?.role !== 'owner'
+  // Scoped staff shouldn't be able to self-assign new tasks — only owners/managers create tasks
+  const canCreate = !isScoped
 
   useEffect(() => { if (profile?.business_id) load() }, [profile])
 
@@ -50,11 +52,7 @@ export default function TasksPage() {
       .select('*, users!tasks_assigned_to_fkey(full_name), completed_user:users!tasks_completed_by_fkey(full_name), orders(id, delivery_state, customers(full_name, phone), order_items(product_id, quantity, products(name)))')
       .eq('merchant_id', bid)
       .order('due_date', { ascending: true, nullsFirst: false })
-
-    // Scoped users only see tasks assigned to them
-    if (isScoped) {
-      taskQuery = taskQuery.eq('assigned_to', profile.id)
-    }
+    if (isScoped) taskQuery = taskQuery.eq('assigned_to', profile.id)
 
     const [tRes, rRes] = await Promise.all([
       taskQuery,
@@ -69,13 +67,8 @@ export default function TasksPage() {
     if (!outcomeForm.outcome || !outcomeModal) return
     setSaving(true)
     await completeTaskWithOutcome({
-      taskId: outcomeModal.id,
-      outcome: outcomeForm.outcome,
-      outcomeNotes: outcomeForm.notes,
-      nextAction: outcomeForm.nextAction,
-      completedBy: profile.id,
-      task: outcomeModal,
-      profile,
+      taskId: outcomeModal.id, outcome: outcomeForm.outcome, outcomeNotes: outcomeForm.notes,
+      nextAction: outcomeForm.nextAction, completedBy: profile.id, task: outcomeModal, profile,
     })
     if (outcomeForm.outcome === 'customer_ready_to_reorder' || outcomeForm.outcome === 'interested_in_another_product') {
       setReorderModal(outcomeModal)
@@ -95,25 +88,16 @@ export default function TasksPage() {
     const totalFee = items.reduce((s, i) => s + (i.products?.delivery_fee || 0), 0)
 
     const { data: newOrder } = await supabase.from('orders').insert({
-      merchant_id: profile.business_id,
-      customer_id: order.customers?.id,
-      delivery_state: order.delivery_state,
-      source: 'follow_up',
-      status: 'new',
-      total_amount: totalAmount,
-      total_delivery_fee: totalFee,
-      notes: `Reorder from task follow-up`,
-      assigned_cs_rep: isScoped ? profile.id : task.assigned_to,
+      merchant_id: profile.business_id, customer_id: order.customers?.id, delivery_state: order.delivery_state,
+      source: 'follow_up', status: 'new', total_amount: totalAmount, total_delivery_fee: totalFee,
+      notes: `Reorder from task follow-up`, assigned_cs_rep: isScoped ? profile.id : task.assigned_to,
     }).select().single()
 
     if (newOrder && items.length > 0) {
       await supabase.from('order_items').insert(
         items.map(i => ({
-          order_id: newOrder.id,
-          product_id: i.product_id,
-          quantity: i.quantity,
-          unit_selling_price: i.products?.selling_price || 0,
-          unit_cost_price: i.products?.cost_price || 0,
+          order_id: newOrder.id, product_id: i.product_id, quantity: i.quantity,
+          unit_selling_price: i.products?.selling_price || 0, unit_cost_price: i.products?.cost_price || 0,
           unit_delivery_fee: i.products?.delivery_fee || 0,
         }))
       )
@@ -138,15 +122,10 @@ export default function TasksPage() {
     if (!manualForm.title) return
     setSaving(true)
     await supabase.from('tasks').insert({
-      merchant_id: profile.business_id,
-      type: 'manual',
-      title: manualForm.title,
-      notes: manualForm.notes,
-      assigned_to: isScoped ? profile.id : (manualForm.assigned_to || null),
-      priority: manualForm.priority,
+      merchant_id: profile.business_id, type: 'manual', title: manualForm.title, notes: manualForm.notes,
+      assigned_to: manualForm.assigned_to || null, priority: manualForm.priority,
       due_date: manualForm.due_date ? new Date(manualForm.due_date).toISOString() : null,
-      created_by: profile.id,
-      status: 'pending',
+      created_by: profile.id, status: 'pending',
     })
     setShowForm(false)
     setManualForm({ title: '', notes: '', assigned_to: '', priority: 'normal', due_date: '' })
@@ -177,7 +156,7 @@ export default function TasksPage() {
             {escalatedCount > 0 && <span className="text-orange-500 ml-2">· {escalatedCount} escalated</span>}
           </p>
         </div>
-        <button onClick={() => setShowForm(true)} className="btn-primary">+ New Task</button>
+        {canCreate && <button onClick={() => setShowForm(true)} className="btn-primary">+ New Task</button>}
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
@@ -199,9 +178,7 @@ export default function TasksPage() {
           <button key={f.key} onClick={() => setFilter(f.key)}
             className={`px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-colors ${filter === f.key ? 'bg-brand-600 text-white' : 'bg-white border border-surface-200 text-ink-500 hover:bg-surface-50'}`}>
             {f.label}
-            <span className="ml-1.5 opacity-70">
-              {f.key === 'all' ? tasks.length : f.key === 'escalated' ? escalatedCount : tasks.filter(t => t.status === f.key).length}
-            </span>
+            <span className="ml-1.5 opacity-70">{f.key === 'all' ? tasks.length : f.key === 'escalated' ? escalatedCount : tasks.filter(t => t.status === f.key).length}</span>
           </button>
         ))}
       </div>
@@ -231,9 +208,7 @@ export default function TasksPage() {
                   <div className="mt-2 px-3 py-2 bg-surface-50 rounded-xl">
                     <p className="text-xs text-ink-500">
                       Customer: <span className="font-medium text-ink-700">{task.orders.customers.full_name}</span>
-                      {task.orders.customers.phone && (
-                        <a href={`tel:${task.orders.customers.phone}`} className="ml-2 text-brand-600 underline">{task.orders.customers.phone}</a>
-                      )}
+                      {task.orders.customers.phone && (<a href={`tel:${task.orders.customers.phone}`} className="ml-2 text-brand-600 underline">{task.orders.customers.phone}</a>)}
                     </p>
                     <p className="text-xs text-ink-400 mt-0.5">State: {task.orders.delivery_state}</p>
                     {task.orders.order_items?.length > 0 && (
@@ -257,9 +232,7 @@ export default function TasksPage() {
                 )}
                 <div className="flex items-center gap-3 mt-2 flex-wrap">
                   {task.due_date && (
-                    <p className={`text-xs ${isOverdue(task) ? 'text-danger font-medium' : 'text-ink-400'}`}>
-                      Due: {new Date(task.due_date).toLocaleDateString('en-NG')}
-                    </p>
+                    <p className={`text-xs ${isOverdue(task) ? 'text-danger font-medium' : 'text-ink-400'}`}>Due: {new Date(task.due_date).toLocaleDateString('en-NG')}</p>
                   )}
                   <p className="text-xs text-ink-400">Assigned: <span className="font-medium text-ink-600">{task.users?.full_name || 'Unassigned'}</span></p>
                 </div>
@@ -272,11 +245,9 @@ export default function TasksPage() {
                 <button onClick={() => { setOutcomeModal(task); setOutcomeForm({ outcome: '', notes: '', nextAction: '' }) }}
                   className="text-xs px-3 py-1.5 rounded-lg bg-brand-50 text-brand-700 font-medium hover:bg-brand-100">Log Outcome</button>
                 {task.status === 'pending' && (
-                  <button onClick={() => updateTaskStatus(task.id, 'in_progress')}
-                    className="text-xs px-3 py-1.5 rounded-lg bg-blue-50 text-blue-700 font-medium hover:bg-blue-100">Start</button>
+                  <button onClick={() => updateTaskStatus(task.id, 'in_progress')} className="text-xs px-3 py-1.5 rounded-lg bg-blue-50 text-blue-700 font-medium hover:bg-blue-100">Start</button>
                 )}
-                <button onClick={() => updateTaskStatus(task.id, 'cancelled')}
-                  className="text-xs px-3 py-1.5 rounded-lg bg-gray-50 text-gray-500 font-medium hover:bg-gray-100">Cancel</button>
+                <button onClick={() => updateTaskStatus(task.id, 'cancelled')} className="text-xs px-3 py-1.5 rounded-lg bg-gray-50 text-gray-500 font-medium hover:bg-gray-100">Cancel</button>
                 {csReps.length > 0 && !isScoped && (
                   <select onChange={e => reassign(task.id, e.target.value)} value={task.assigned_to || ''}
                     className="text-xs px-2 py-1.5 rounded-lg border border-surface-300 bg-white text-ink-700 ml-auto">
@@ -290,7 +261,6 @@ export default function TasksPage() {
         ))}
       </div>
 
-      {/* Outcome Modal */}
       {outcomeModal && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center p-4">
           <div className="bg-white rounded-2xl w-full max-w-md shadow-panel max-h-[90vh] overflow-y-auto">
@@ -331,7 +301,6 @@ export default function TasksPage() {
         </div>
       )}
 
-      {/* Reorder Modal */}
       {reorderModal && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl w-full max-w-sm shadow-panel p-5 space-y-4">
@@ -353,8 +322,7 @@ export default function TasksPage() {
         </div>
       )}
 
-      {/* Manual Task Modal */}
-      {showForm && (
+      {showForm && canCreate && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center p-4">
           <div className="bg-white rounded-2xl w-full max-w-md shadow-panel max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between p-5 border-b border-surface-200">
@@ -370,15 +338,13 @@ export default function TasksPage() {
                 <label className="label">Notes</label>
                 <textarea className="input" rows={2} value={manualForm.notes} onChange={e => setManualForm(f => ({...f, notes: e.target.value}))} placeholder="Additional context…" />
               </div>
-              {!isScoped && (
-                <div>
-                  <label className="label">Assign To</label>
-                  <select className="input" value={manualForm.assigned_to} onChange={e => setManualForm(f => ({...f, assigned_to: e.target.value}))}>
-                    <option value="">Select staff</option>
-                    {csReps.map(r => <option key={r.id} value={r.id}>{r.full_name}</option>)}
-                  </select>
-                </div>
-              )}
+              <div>
+                <label className="label">Assign To</label>
+                <select className="input" value={manualForm.assigned_to} onChange={e => setManualForm(f => ({...f, assigned_to: e.target.value}))}>
+                  <option value="">Select staff</option>
+                  {csReps.map(r => <option key={r.id} value={r.id}>{r.full_name}</option>)}
+                </select>
+              </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="label">Priority</label>

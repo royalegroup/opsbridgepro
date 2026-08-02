@@ -2,51 +2,41 @@ import { useEffect, useState } from 'react'
 import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../contexts/AuthContext'
 
-const MERCHANT_PAGES = [
+const LOGISTICS_PAGES = [
   { key: 'dashboard', label: 'Dashboard' },
-  { key: 'orders', label: 'Orders' },
-  { key: 'tasks', label: 'Tasks' },
-  { key: 'customers', label: 'Customers' },
-  { key: 'products', label: 'Products' },
-  { key: 'bundles', label: 'Bundles' },
+  { key: 'requests', label: 'Requests' },
+  { key: 'agents', label: 'Agents' },
   { key: 'stock', label: 'Stock' },
-  { key: 'finance', label: 'Finance' },
-  { key: 'expenses', label: 'Expenses' },
-  { key: 'staff', label: 'Staff' },
+  { key: 'deliveries', label: 'Deliveries' },
+  { key: 'cod', label: 'COD' },
+  { key: 'merchants', label: 'Merchants' },
+  { key: 'royale_staff', label: 'Staff' },
   { key: 'reports', label: 'Reports' },
 ]
 
-const PERMISSION_PRESETS = [
-  { label: 'CS Rep', permissions: ['dashboard', 'orders', 'customers', 'tasks'], scoped: true },
-  { label: 'Store Manager', permissions: ['dashboard', 'orders', 'customers', 'products', 'stock', 'tasks', 'staff'], scoped: false },
-  { label: 'Finance Officer', permissions: ['dashboard', 'finance', 'expenses', 'reports'], scoped: false },
-  { label: 'Marketing Manager', permissions: ['dashboard', 'products', 'bundles', 'orders', 'reports', 'expenses'], scoped: false, isMarketing: true },
-  { label: 'Full Access', permissions: [], scoped: false },
+const ROYALE_ROLE_PRESETS = [
+  { label: 'Operations Manager', role: 'Operations Manager', permissions: [], scoped: false },
+  { label: 'Dispatch Coordinator', role: 'Dispatch Coordinator', permissions: ['dashboard', 'requests', 'agents', 'deliveries'], scoped: false },
+  { label: 'Zonal Lead', role: 'Agent Supervisor / Zonal Lead', permissions: ['dashboard', 'requests', 'agents', 'deliveries', 'stock'], scoped: true },
+  { label: 'Remittance Officer', role: 'Remittance Officer', permissions: ['dashboard', 'cod'], scoped: false },
+  { label: 'Finance Manager', role: 'Finance Manager', permissions: ['dashboard', 'cod', 'reports'], scoped: false },
+  { label: 'Risk/Blocklist Officer', role: 'Fraud / Risk Officer', permissions: ['dashboard', 'merchants', 'requests'], scoped: false },
+  { label: 'Warehouse Officer', role: 'Warehouse / Inventory Officer', permissions: ['dashboard', 'stock'], scoped: false },
+  { label: 'Customer Support', role: 'Customer Support / Complaints Officer', permissions: ['dashboard', 'requests', 'deliveries'], scoped: false },
 ]
 
-const MARKETING_TEAM_ROLES = [
-  'Digital Marketing Manager',
-  'Creative/Design Team',
-  'Copywriter',
-  'Web Designer',
-  'Ads Specialist',
-  'SEO Specialist',
-  'Social Media Manager',
-  'Video Editor',
-]
-
-export default function StaffPage() {
+export default function RoyaleStaffPage() {
   const { profile } = useAuth()
   const [staff, setStaff] = useState([])
   const [showForm, setShowForm] = useState(false)
   const [credModal, setCredModal] = useState(null)
   const [pwModal, setPwModal] = useState(false)
   const [permModal, setPermModal] = useState(null)
-  const [form, setForm] = useState({ full_name: '', phone: '', email: '', role: '', username: '', permissions: ['dashboard', 'orders', 'customers', 'tasks'], scope_own_records: true, isMarketing: false })
+  const [form, setForm] = useState({ full_name: '', phone: '', email: '', role: '', username: '', permissions: [], scope_own_records: false })
   const [credForm, setCredForm] = useState({ username: '', password: '', confirmPassword: '' })
   const [pwForm, setPwForm] = useState({ newPw: '', confirm: '' })
   const [permEdit, setPermEdit] = useState([])
-  const [scopeEdit, setScopeEdit] = useState(true)
+  const [scopeEdit, setScopeEdit] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [credError, setCredError] = useState('')
@@ -57,7 +47,7 @@ export default function StaffPage() {
   useEffect(() => { if (profile?.business_id) load() }, [profile])
 
   async function load() {
-    const { data } = await supabase.from('users').select('*').eq('business_id', profile.business_id).neq('role', 'owner').order('created_at', { ascending: false })
+    const { data } = await supabase.from('users').select('*').eq('business_id', profile.business_id).eq('business_type', 'logistics').not('role', 'in', '(owner,agent)').order('created_at', { ascending: false })
     if (data) setStaff(data)
   }
 
@@ -66,13 +56,7 @@ export default function StaffPage() {
   }
 
   function applyPreset(preset) {
-    setForm(f => ({
-      ...f,
-      permissions: preset.permissions,
-      scope_own_records: preset.scoped,
-      isMarketing: !!preset.isMarketing,
-      role: preset.isMarketing ? '' : f.role,
-    }))
+    setForm(f => ({ ...f, role: preset.role, permissions: preset.permissions, scope_own_records: preset.scoped }))
   }
 
   async function save() {
@@ -91,10 +75,10 @@ export default function StaffPage() {
       full_name: form.full_name,
       phone: form.phone || null,
       email: form.email?.toLowerCase() || `staff_${Date.now()}_${Math.random().toString(36).slice(2, 7)}@opsbridgepro.internal`,
-      role: form.role.toLowerCase().replace(/\s+/g, '_'),
+      role: form.role.toLowerCase().replace(/[\s/]+/g, '_'),
       username: form.username.toLowerCase().trim(),
       business_id: profile.business_id,
-      business_type: 'merchant',
+      business_type: 'logistics',
       is_active: true,
       permissions: form.permissions,
       scope_own_records: form.scope_own_records,
@@ -103,7 +87,7 @@ export default function StaffPage() {
     if (insertError) { setError(`Failed: ${insertError.message}`); setSaving(false); return }
 
     setShowForm(false)
-    setForm({ full_name: '', phone: '', email: '', role: '', username: '', permissions: ['dashboard', 'orders', 'customers', 'tasks'], scope_own_records: true, isMarketing: false })
+    setForm({ full_name: '', phone: '', email: '', role: '', username: '', permissions: [], scope_own_records: false })
     load()
     setSaving(false)
   }
@@ -164,7 +148,7 @@ export default function StaffPage() {
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div>
           <h1 className="page-title">Staff</h1>
-          <p className="text-ink-400 text-sm mt-0.5">{staff.filter(s => s.is_active).length} active staff members</p>
+          <p className="text-ink-400 text-sm mt-0.5">{staff.filter(s => s.is_active).length} active office staff (not field agents)</p>
         </div>
         <div className="flex gap-2 flex-wrap">
           <button onClick={() => { setPwModal(true); setPwError(''); setPwSuccess('') }} className="btn-secondary text-sm">🔑 Change My Password</button>
@@ -184,9 +168,7 @@ export default function StaffPage() {
                   {s.phone && <p className="text-xs text-ink-400">{s.phone}</p>}
                   {s.permissions?.length > 0 && <p className="text-xs text-brand-600 mt-0.5">Access: {s.permissions.join(', ')}</p>}
                   {s.permissions?.length === 0 && <p className="text-xs text-green-600 mt-0.5">Full access</p>}
-                  <p className={`text-xs mt-0.5 font-medium ${s.scope_own_records ? 'text-amber-600' : 'text-ink-400'}`}>
-                    {s.scope_own_records ? '🔒 Sees only own records' : '🔓 Sees all business records'}
-                  </p>
+                  <p className={`text-xs mt-0.5 font-medium ${s.scope_own_records ? 'text-amber-600' : 'text-ink-400'}`}>{s.scope_own_records ? '🔒 Sees only own zone/records' : '🔓 Sees all business records'}</p>
                 </div>
               </div>
               <div className="flex-shrink-0">
@@ -198,7 +180,7 @@ export default function StaffPage() {
                 className="text-xs px-3 py-1.5 rounded-lg bg-brand-50 text-brand-700 font-medium hover:bg-brand-100">
                 {s.auth_id ? 'Update Credentials' : 'Set Login'}
               </button>
-              <button onClick={() => { setPermModal(s); setPermEdit(s.permissions || []); setScopeEdit(s.scope_own_records !== false) }}
+              <button onClick={() => { setPermModal(s); setPermEdit(s.permissions || []); setScopeEdit(s.scope_own_records === true) }}
                 className="text-xs px-3 py-1.5 rounded-lg bg-surface-100 text-ink-700 font-medium hover:bg-surface-200">
                 Edit Access
               </button>
@@ -212,9 +194,9 @@ export default function StaffPage() {
 
         {staff.length === 0 && (
           <div className="card text-center py-12">
-            <p className="text-3xl mb-2">◉</p>
-            <p className="text-ink-500 font-medium">No staff added yet</p>
-            <p className="text-sm text-ink-400 mt-1">Add your CS Reps, Store Manager, Marketing team, Finance team and more.</p>
+            <p className="text-3xl mb-2">◧</p>
+            <p className="text-ink-500 font-medium">No office staff added yet</p>
+            <p className="text-sm text-ink-400 mt-1">Add your Ops Manager, Dispatch Coordinator, Remittance Officer and more. (Field agents are managed under Agents.)</p>
           </div>
         )}
       </div>
@@ -224,43 +206,25 @@ export default function StaffPage() {
         <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center p-4">
           <div className="bg-white rounded-2xl w-full max-w-md shadow-panel max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between p-5 border-b border-surface-200">
-              <h3 className="font-semibold text-ink-900">Add Staff Member</h3>
+              <h3 className="font-semibold text-ink-900">Add Royale Staff</h3>
               <button onClick={() => { setShowForm(false); setError('') }} className="text-ink-300 text-xl">✕</button>
             </div>
             <div className="p-5 space-y-4">
               <div><label className="label">Full Name</label><input className="input" value={form.full_name} onChange={e => setForm(f => ({...f, full_name: e.target.value}))} placeholder="Staff full name" /></div>
-
-              {/* Role — dropdown if Marketing preset chosen, else free text */}
-              {form.isMarketing ? (
-                <div>
-                  <label className="label">Marketing Role</label>
-                  <select className="input" value={form.role} onChange={e => setForm(f => ({...f, role: e.target.value}))}>
-                    <option value="">Select role</option>
-                    {MARKETING_TEAM_ROLES.map(r => <option key={r} value={r}>{r}</option>)}
-                  </select>
-                  <p className="text-xs text-ink-400 mt-1">Or switch off "Marketing Manager" preset below to type a custom role.</p>
-                </div>
-              ) : (
-                <div>
-                  <label className="label">Role</label>
-                  <input className="input" value={form.role} onChange={e => setForm(f => ({...f, role: e.target.value}))} placeholder="e.g. CS Rep, Media Manager, Accountant" />
-                  <p className="text-xs text-ink-400 mt-1">Type any role — no restrictions.</p>
-                </div>
-              )}
-
-              <div><label className="label">Username</label><input className="input" value={form.username} onChange={e => setForm(f => ({...f, username: e.target.value.toLowerCase().replace(/\s/g, '_')}))} placeholder="e.g. amaka_cs" /><p className="text-xs text-ink-400 mt-1">Lowercase, no spaces. Used to log in.</p></div>
+              <div><label className="label">Role</label><input className="input" value={form.role} onChange={e => setForm(f => ({...f, role: e.target.value}))} placeholder="e.g. Dispatch Coordinator" /><p className="text-xs text-ink-400 mt-1">Type any role, or pick a preset below to autofill.</p></div>
+              <div><label className="label">Username</label><input className="input" value={form.username} onChange={e => setForm(f => ({...f, username: e.target.value.toLowerCase().replace(/\s/g, '_')}))} placeholder="e.g. emeka_dispatch" /></div>
               <div><label className="label">Phone</label><input className="input" value={form.phone} onChange={e => setForm(f => ({...f, phone: e.target.value}))} placeholder="08012345678" /></div>
-              <div><label className="label">Email <span className="text-ink-300 font-normal normal-case">(optional)</span></label><input type="email" className="input" value={form.email} onChange={e => setForm(f => ({...f, email: e.target.value}))} placeholder="For password recovery" /></div>
+              <div><label className="label">Email <span className="text-ink-300 font-normal normal-case">(optional)</span></label><input type="email" className="input" value={form.email} onChange={e => setForm(f => ({...f, email: e.target.value}))} /></div>
 
               <div>
-                <label className="label">Access Permissions</label>
+                <label className="label">Role Presets</label>
                 <div className="flex gap-2 flex-wrap mb-2">
-                  {PERMISSION_PRESETS.map(p => (
+                  {ROYALE_ROLE_PRESETS.map(p => (
                     <button key={p.label} type="button" onClick={() => applyPreset(p)} className="text-xs px-2.5 py-1 rounded-lg bg-brand-50 text-brand-700 font-medium hover:bg-brand-100">{p.label}</button>
                   ))}
                 </div>
                 <div className="flex flex-wrap gap-1.5 p-3 border border-surface-200 rounded-xl">
-                  {MERCHANT_PAGES.map(p => (
+                  {LOGISTICS_PAGES.map(p => (
                     <button key={p.key} type="button" onClick={() => togglePermission(p.key)}
                       className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${form.permissions.includes(p.key) ? 'bg-brand-600 text-white' : 'bg-surface-100 text-ink-600 hover:bg-surface-200'}`}>
                       {p.label}
@@ -273,8 +237,8 @@ export default function StaffPage() {
               <div className="bg-amber-50 border border-amber-100 rounded-xl p-3">
                 <div className="flex items-center justify-between">
                   <div>
-                    <p className="text-sm font-semibold text-ink-900">Restrict to own records only</p>
-                    <p className="text-xs text-ink-500 mt-0.5">{form.scope_own_records ? 'They will only see orders, customers and tasks assigned to or created by them.' : 'They will see all business orders, customers and tasks.'}</p>
+                    <p className="text-sm font-semibold text-ink-900">Restrict to own zone/records only</p>
+                    <p className="text-xs text-ink-500 mt-0.5">Useful for Zonal Leads managing a cluster of states.</p>
                   </div>
                   <button type="button" onClick={() => setForm(f => ({ ...f, scope_own_records: !f.scope_own_records }))}
                     className={`w-11 h-6 rounded-full transition-colors relative flex-shrink-0 ml-3 ${form.scope_own_records ? 'bg-amber-500' : 'bg-surface-300'}`}>
@@ -297,17 +261,9 @@ export default function StaffPage() {
       {permModal && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl w-full max-w-md shadow-panel p-5 space-y-4 max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between">
-              <h3 className="font-semibold text-ink-900">Edit Access — {permModal.full_name}</h3>
-              <button onClick={() => setPermModal(null)} className="text-ink-300 text-xl">✕</button>
-            </div>
-            <div className="flex gap-2 flex-wrap">
-              {PERMISSION_PRESETS.map(p => (
-                <button key={p.label} type="button" onClick={() => { setPermEdit(p.permissions); setScopeEdit(p.scoped) }} className="text-xs px-2.5 py-1 rounded-lg bg-brand-50 text-brand-700 font-medium hover:bg-brand-100">{p.label}</button>
-              ))}
-            </div>
+            <div className="flex items-center justify-between"><h3 className="font-semibold text-ink-900">Edit Access — {permModal.full_name}</h3><button onClick={() => setPermModal(null)} className="text-ink-300 text-xl">✕</button></div>
             <div className="flex flex-wrap gap-1.5 p-3 border border-surface-200 rounded-xl">
-              {MERCHANT_PAGES.map(p => (
+              {LOGISTICS_PAGES.map(p => (
                 <button key={p.key} type="button" onClick={() => setPermEdit(pe => pe.includes(p.key) ? pe.filter(x => x !== p.key) : [...pe, p.key])}
                   className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${permEdit.includes(p.key) ? 'bg-brand-600 text-white' : 'bg-surface-100 text-ink-600 hover:bg-surface-200'}`}>
                   {p.label}
@@ -317,10 +273,7 @@ export default function StaffPage() {
             <p className="text-xs text-ink-400">{permEdit.length === 0 ? 'Full access to everything' : `${permEdit.length} pages selected`}</p>
             <div className="bg-amber-50 border border-amber-100 rounded-xl p-3">
               <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-semibold text-ink-900">Restrict to own records only</p>
-                  <p className="text-xs text-ink-500 mt-0.5">{scopeEdit ? 'Only sees orders/customers/tasks assigned to or created by them.' : 'Sees all business records.'}</p>
-                </div>
+                <p className="text-sm font-semibold text-ink-900">Restrict to own zone/records</p>
                 <button type="button" onClick={() => setScopeEdit(s => !s)} className={`w-11 h-6 rounded-full transition-colors relative flex-shrink-0 ml-3 ${scopeEdit ? 'bg-amber-500' : 'bg-surface-300'}`}>
                   <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white transition-transform ${scopeEdit ? 'translate-x-5' : 'translate-x-0.5'}`} />
                 </button>
@@ -338,10 +291,7 @@ export default function StaffPage() {
       {credModal && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center p-4">
           <div className="bg-white rounded-2xl w-full max-w-md shadow-panel">
-            <div className="flex items-center justify-between p-5 border-b border-surface-200">
-              <h3 className="font-semibold text-ink-900">Set Login Credentials</h3>
-              <button onClick={() => setCredModal(null)} className="text-ink-300 text-xl">✕</button>
-            </div>
+            <div className="flex items-center justify-between p-5 border-b border-surface-200"><h3 className="font-semibold text-ink-900">Set Login Credentials</h3><button onClick={() => setCredModal(null)} className="text-ink-300 text-xl">✕</button></div>
             <div className="p-5 space-y-4">
               <div className="bg-surface-50 rounded-xl p-3"><p className="text-sm font-semibold text-ink-900">{credModal.full_name}</p><p className="text-xs text-ink-400 capitalize">{credModal.role?.replace(/_/g, ' ')}</p></div>
               <div><label className="label">Username</label><input className="input" value={credForm.username} onChange={e => setCredForm(f => ({...f, username: e.target.value.toLowerCase().replace(/\s/g, '_')}))} /></div>

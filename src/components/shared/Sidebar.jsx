@@ -23,6 +23,7 @@ const LOGISTICS_NAV = [
   { label: 'Deliveries', icon: '▣', page: 'deliveries' },
   { label: 'COD', icon: '◆', page: 'cod' },
   { label: 'Merchants', icon: '▦', page: 'merchants' },
+  { label: 'Staff', icon: '◧', page: 'royale_staff' },
   { label: 'Reports', icon: '◧', page: 'reports' },
 ]
 
@@ -32,38 +33,28 @@ export default function Sidebar({ activePage, onNavigate, businessType }) {
 
   const allNav = businessType === 'merchant' ? MERCHANT_NAV : LOGISTICS_NAV
 
-  // Owners and users with empty permissions array see everything
-  // All other users see only what's in their permissions array
   const isOwner = profile?.role === 'owner'
   const permissions = profile?.permissions || []
   const hasFullAccess = isOwner || permissions.length === 0
 
-  const nav = hasFullAccess
-    ? allNav
-    : allNav.filter(n => permissions.includes(n.page))
+  const nav = hasFullAccess ? allNav : allNav.filter(n => permissions.includes(n.page))
 
   function NavContent() {
     return (
       <div className="flex flex-col h-full">
-        {/* Brand */}
         <div className="px-4 py-5 border-b border-surface-200">
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 rounded-xl bg-brand-600 flex items-center justify-center text-white font-bold text-sm flex-shrink-0">◈</div>
             <div className="min-w-0">
               <p className="font-bold text-ink-900 text-sm leading-tight">OpsBridge Pro</p>
-              <p className="text-xs text-ink-400 truncate">
-                {businessType === 'merchant' ? '🛍' : '🚚'} {profile?.businesses?.name}
-              </p>
+              <p className="text-xs text-ink-400 truncate">{businessType === 'merchant' ? '🛍' : '🚚'} {profile?.businesses?.name}</p>
             </div>
           </div>
         </div>
 
-        {/* Nav */}
         <nav className="flex-1 px-3 py-4 space-y-0.5 overflow-y-auto">
           {nav.map(item => (
-            <button
-              key={item.page}
-              onClick={() => { onNavigate(item.page); setMobileOpen(false) }}
+            <button key={item.page} onClick={() => { onNavigate(item.page); setMobileOpen(false) }}
               className={`nav-item w-full text-left ${activePage === item.page ? 'nav-item-active' : 'nav-item-inactive'}`}>
               <span className="text-base w-5 flex-shrink-0">{item.icon}</span>
               <span>{item.label}</span>
@@ -71,7 +62,6 @@ export default function Sidebar({ activePage, onNavigate, businessType }) {
           ))}
         </nav>
 
-        {/* User */}
         <div className="px-3 py-4 border-t border-surface-200">
           <div className="flex items-center gap-3 px-3 py-2.5 rounded-xl bg-surface-50">
             <div className="w-8 h-8 rounded-full bg-brand-100 flex items-center justify-center text-brand-700 font-bold text-sm flex-shrink-0">
@@ -90,12 +80,10 @@ export default function Sidebar({ activePage, onNavigate, businessType }) {
 
   return (
     <>
-      {/* Desktop sidebar */}
       <aside className="hidden lg:flex flex-col w-60 bg-white border-r border-surface-200 h-screen sticky top-0 flex-shrink-0">
         <NavContent />
       </aside>
 
-      {/* Mobile top bar */}
       <div className="lg:hidden fixed top-0 left-0 right-0 z-40 bg-white border-b border-surface-200 px-4 py-3 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <div className="w-7 h-7 rounded-lg bg-brand-600 flex items-center justify-center text-white text-xs font-bold">◈</div>
@@ -104,7 +92,6 @@ export default function Sidebar({ activePage, onNavigate, businessType }) {
         <button onClick={() => setMobileOpen(true)} className="w-9 h-9 flex items-center justify-center rounded-xl bg-surface-100 text-ink-700">☰</button>
       </div>
 
-      {/* Mobile drawer */}
       {mobileOpen && (
         <div className="lg:hidden fixed inset-0 z-50 flex">
           <div className="absolute inset-0 bg-black/40" onClick={() => setMobileOpen(false)} />
@@ -113,9 +100,7 @@ export default function Sidebar({ activePage, onNavigate, businessType }) {
               <span className="font-bold text-ink-900">Menu</span>
               <button onClick={() => setMobileOpen(false)} className="text-ink-400 text-xl">✕</button>
             </div>
-            <div className="flex-1 overflow-y-auto">
-              <NavContent />
-            </div>
+            <div className="flex-1 overflow-y-auto"><NavContent /></div>
           </div>
         </div>
       )}

@@ -13,14 +13,13 @@ export default function CustomersPage() {
   const [saving, setSaving] = useState(false)
 
   const isScoped = profile?.scope_own_records === true && profile?.role !== 'owner'
+  const canCreate = !isScoped
 
   useEffect(() => { if (profile?.business_id) load() }, [profile])
 
   async function load() {
     let query = supabase.from('customers').select('*').eq('merchant_id', profile.business_id).order('created_at', { ascending: false })
-    if (isScoped) {
-      query = query.eq('created_by', profile.id)
-    }
+    if (isScoped) query = query.eq('created_by', profile.id)
     const { data } = await query
     if (data) setCustomers(data)
   }
@@ -52,11 +51,9 @@ export default function CustomersPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="page-title">Customers</h1>
-          <p className="text-ink-400 text-sm mt-0.5">
-            {customers.length} {isScoped ? 'customers you added' : 'customers'}
-          </p>
+          <p className="text-ink-400 text-sm mt-0.5">{customers.length} {isScoped ? 'customers you added' : 'customers'}</p>
         </div>
-        <button onClick={() => setShowForm(true)} className="btn-primary">+ Add Customer</button>
+        {canCreate && <button onClick={() => setShowForm(true)} className="btn-primary">+ Add Customer</button>}
       </div>
 
       <input className="input" placeholder="Search by name, phone, or state…" value={search} onChange={e => setSearch(e.target.value)} />
@@ -90,7 +87,7 @@ export default function CustomersPage() {
         )}
       </div>
 
-      {showForm && (
+      {showForm && canCreate && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center p-4">
           <div className="bg-white rounded-2xl w-full max-w-md shadow-panel">
             <div className="flex items-center justify-between p-5 border-b border-surface-200">
