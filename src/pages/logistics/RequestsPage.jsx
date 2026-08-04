@@ -5,6 +5,7 @@ import Badge from '../../components/shared/Badge'
 import { deductAgentStockOnDelivery } from '../../lib/stockHelpers'
 import { createFollowUpTask } from '../../lib/taskHelpers'
 import { createCODRecord } from '../../lib/codHelpers'
+import { awardOrderCommission } from '../../lib/rewardsHelpers'
 
 export default function RequestsPage() {
   const { profile } = useAuth()
@@ -19,10 +20,10 @@ export default function RequestsPage() {
     const bid = profile.business_id
     const [rRes, aRes] = await Promise.all([
       supabase.from('logistics_requests')
-        .select('*, businesses!logistics_requests_merchant_id_fkey(name), agents(id, users(full_name)), orders(id, delivery_state, customers(full_name, phone, address))')
+        .select('*, businesses!logistics_requests_merchant_id_fkey(name), agents(id, user_id, users(full_name)), orders(id, delivery_state, merchant_id, assigned_cs_rep, total_amount, customers(full_name, phone, address))')
         .eq('logistics_id', bid)
         .order('created_at', { ascending: false }),
-      supabase.from('agents').select('id, states_covered, users(full_name)').eq('logistics_id', bid).eq('is_active', true),
+      supabase.from('agents').select('id, user_id, states_covered, users(full_name)').eq('logistics_id', bid).eq('is_active', true),
     ])
     if (rRes.data) setRequests(rRes.data)
     if (aRes.data) setAgents(aRes.data)
@@ -44,18 +45,15 @@ export default function RequestsPage() {
 
     const req = requests.find(r => r.id === requestId)
 
-    // Update parent order status
     const orderStatus = { out_for_delivery: 'in_transit', delivered: 'delivered', failed: 'failed' }[status]
     if (orderStatus && req?.orders?.id) {
       await supabase.from('orders').update({ status: orderStatus }).eq('id', req.orders.id)
     }
 
-    // Deduct agent stock on delivery
     if (status === 'delivered' && req?.orders?.id && req?.agents?.id) {
       await deductAgentStockOnDelivery(req.orders.id, req.agents.id)
     }
 
-    // Auto-create COD record on delivery
     if (status === 'delivered' && req?.agents?.id) {
       const { data: order } = await supabase
         .from('orders')
@@ -63,17 +61,33 @@ export default function RequestsPage() {
         .eq('id', req.orders.id)
         .single()
       if (order) {
-        await createCODRecord(
-          requestId,
-          req.agents.id,
-          profile.business_id,
-          order.merchant_id,
-          order.total_amount
-        )
+        await createCODRecord(requestId, req.agents.id, profile.business_id, order.merchant_id, order.total_amount)
+
+        // Award CS Rep commission on the merchant side (if an active rule exists)
+        if (order.assigned_cs_rep) {
+          const { data: repUser } = await supabase.from('users').select('role').eq('id', order.assigned_cs_rep).single()
+          await awardOrderCommission({
+            businessId: order.merchant_id,
+            staffId: order.assigned_cs_rep,
+            role: repUser?.role,
+            department: 'merchant',
+            order: { id: req.orders.id, total_amount: order.total_amount },
+          })
+        }
+
+        // Award Agent commission on the logistics side (this business)
+        if (req.agents.user_id) {
+          await awardOrderCommission({
+            businessId: profile.business_id,
+            staffId: req.agents.user_id,
+            role: 'agent',
+            department: 'logistics',
+            order: { id: req.orders.id, total_amount: order.total_amount },
+          })
+        }
       }
     }
 
-    // Auto-create follow-up task on delivered or failed
     if ((status === 'delivered' || status === 'failed') && req?.orders?.id) {
       const { data: fullOrder } = await supabase
         .from('orders')

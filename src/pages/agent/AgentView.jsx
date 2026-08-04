@@ -5,6 +5,7 @@ import Badge from '../../components/shared/Badge'
 import { deductAgentStockOnDelivery } from '../../lib/stockHelpers'
 import { createFollowUpTask } from '../../lib/taskHelpers'
 import { createCODRecord } from '../../lib/codHelpers'
+import { awardOrderCommission } from '../../lib/rewardsHelpers'
 
 export default function AgentView() {
   const { profile, signOut } = useAuth()
@@ -20,31 +21,21 @@ export default function AgentView() {
   useEffect(() => { if (profile?.id) load() }, [profile])
 
   async function load() {
-    // First get the agent record using the user's profile ID
-    const { data: agentData } = await supabase
-      .from('agents')
-      .select('*')
-      .eq('user_id', profile.id)
-      .single()
-
+    const { data: agentData } = await supabase.from('agents').select('*').eq('user_id', profile.id).single()
     if (!agentData) return
     setAgent(agentData)
 
-    // Now use agent.id for all subsequent queries
     const [dRes, sRes, cRes] = await Promise.all([
       supabase.from('logistics_requests')
-        .select('*, orders(*, customers(full_name, phone, address), order_items(product_id, quantity))')
+        .select('*, orders(*, merchant_id, assigned_cs_rep, customers(full_name, phone, address), order_items(product_id, quantity))')
         .eq('assigned_agent', agentData.id)
         .order('created_at', { ascending: false }),
-      supabase.from('agent_stock')
-        .select('*, products(name)')
-        .eq('agent_id', agentData.id),
+      supabase.from('agent_stock').select('*, products(name)').eq('agent_id', agentData.id),
       supabase.from('cod_remittances')
         .select('*, logistics_requests(orders(customers(full_name)))')
         .eq('agent_id', agentData.id)
         .order('created_at', { ascending: false }),
     ])
-
     if (dRes.data) setDeliveries(dRes.data)
     if (sRes.data) setStock(sRes.data)
     if (cRes.data) setCodRecords(cRes.data)
@@ -65,7 +56,6 @@ export default function AgentView() {
     if (status === 'delivered' && req?.order_id && agent?.id) {
       await deductAgentStockOnDelivery(req.order_id, agent.id)
 
-      // Auto-create COD record
       const { data: order } = await supabase
         .from('orders')
         .select('total_amount, merchant_id, assigned_cs_rep, customers(full_name)')
@@ -74,9 +64,29 @@ export default function AgentView() {
 
       if (order && agent) {
         await createCODRecord(id, agent.id, agent.logistics_id, order.merchant_id, order.total_amount)
+
+        // Award CS Rep commission on the merchant side (if an active rule exists)
+        if (order.assigned_cs_rep) {
+          const { data: repUser } = await supabase.from('users').select('role').eq('id', order.assigned_cs_rep).single()
+          await awardOrderCommission({
+            businessId: order.merchant_id,
+            staffId: order.assigned_cs_rep,
+            role: repUser?.role,
+            department: 'merchant',
+            order: { id: req.order_id, total_amount: order.total_amount },
+          })
+        }
+
+        // Award this agent's own commission on the logistics side
+        await awardOrderCommission({
+          businessId: agent.logistics_id,
+          staffId: profile.id,
+          role: 'agent',
+          department: 'logistics',
+          order: { id: req.order_id, total_amount: order.total_amount },
+        })
       }
 
-      // Auto-create follow-up task
       const { data: fullOrder } = await supabase
         .from('orders')
         .select('*, customers(full_name, phone)')
@@ -91,31 +101,21 @@ export default function AgentView() {
   }
 
   async function submitBatchRemittance() {
-    // Get all pending COD records for this agent
     const pending = codRecords.filter(c => c.agent_remittance_status === 'pending')
     if (pending.length === 0) return
     setSaving(true)
-
     const batchRef = `BATCH-${Date.now()}`
     const ids = pending.map(c => c.id)
-
     await supabase.from('cod_remittances')
-      .update({
-        agent_remittance_status: 'remitted',
-        agent_remitted_at: new Date().toISOString(),
-        batch_reference: batchRef,
-      })
+      .update({ agent_remittance_status: 'remitted', agent_remitted_at: new Date().toISOString(), batch_reference: batchRef })
       .in('id', ids)
-
     load()
     setSaving(false)
   }
 
   async function submitDelayReason() {
     if (!delayReason || !delayModal) return
-    await supabase.from('cod_remittances')
-      .update({ agent_delay_reason: delayReason })
-      .eq('id', delayModal.id)
+    await supabase.from('cod_remittances').update({ agent_delay_reason: delayReason }).eq('id', delayModal.id)
     setDelayModal(null)
     setDelayReason('')
     load()
@@ -130,7 +130,6 @@ export default function AgentView() {
 
   return (
     <div className="min-h-screen bg-surface-50">
-      {/* Header */}
       <div className="bg-brand-700 text-white px-4 pt-10 pb-6">
         <div className="flex items-center justify-between">
           <div>
@@ -151,15 +150,12 @@ export default function AgentView() {
             <p className="text-brand-300 text-xs mt-0.5">Delivered</p>
           </div>
           <div className="bg-white/10 rounded-xl p-3 text-center">
-            <p className={`text-2xl font-bold ${overdueCOD.length > 0 ? 'text-amber-300' : ''}`}>
-              ₦{(totalPending/1000).toFixed(0)}k
-            </p>
+            <p className={`text-2xl font-bold ${overdueCOD.length > 0 ? 'text-amber-300' : ''}`}>₦{(totalPending/1000).toFixed(0)}k</p>
             <p className="text-brand-300 text-xs mt-0.5">Pending COD</p>
           </div>
         </div>
       </div>
 
-      {/* Overdue COD alert */}
       {overdueCOD.length > 0 && (
         <div className="mx-4 mt-4 bg-red-50 border border-red-200 rounded-2xl p-4">
           <p className="text-sm font-bold text-red-700">⚠ {overdueCOD.length} overdue COD remittance{overdueCOD.length > 1 ? 's' : ''}!</p>
@@ -167,7 +163,6 @@ export default function AgentView() {
         </div>
       )}
 
-      {/* Tabs */}
       <div className="flex border-b border-surface-200 bg-white sticky top-0 z-10 mt-4">
         {[['deliveries', 'Deliveries'], ['cod', `COD${pendingCOD.length > 0 ? ` (${pendingCOD.length})` : ''}`], ['stock', 'Stock']].map(([t, l]) => (
           <button key={t} onClick={() => setTab(t)}
@@ -178,8 +173,6 @@ export default function AgentView() {
       </div>
 
       <div className="p-4 space-y-4 pb-20">
-
-        {/* DELIVERIES TAB */}
         {tab === 'deliveries' && (
           <>
             {active.length > 0 && (
@@ -240,22 +233,17 @@ export default function AgentView() {
           </>
         )}
 
-        {/* COD TAB */}
         {tab === 'cod' && (
           <div className="space-y-4">
             {pendingCOD.length > 0 && (
               <div className="card bg-brand-50 border-brand-100">
                 <p className="text-sm font-semibold text-brand-800">Total Pending: ₦{totalPending.toLocaleString()}</p>
                 <p className="text-xs text-brand-600 mt-1">{pendingCOD.length} unremitted collection{pendingCOD.length > 1 ? 's' : ''}</p>
-                <button
-                  onClick={submitBatchRemittance}
-                  disabled={saving}
-                  className="btn-primary w-full mt-3 text-sm">
+                <button onClick={submitBatchRemittance} disabled={saving} className="btn-primary w-full mt-3 text-sm">
                   {saving ? 'Processing…' : `Remit All to Manager (₦${totalPending.toLocaleString()})`}
                 </button>
               </div>
             )}
-
             <div className="space-y-3">
               {codRecords.map(c => {
                 const isOverdue = c.due_at && new Date(c.due_at) < new Date() && c.agent_remittance_status === 'pending'
@@ -264,49 +252,31 @@ export default function AgentView() {
                     <div className="flex items-start justify-between gap-3">
                       <div>
                         <p className="font-semibold text-ink-900">₦{Number(c.amount).toLocaleString()}</p>
-                        <p className="text-xs text-ink-400 mt-0.5">
-                          {c.logistics_requests?.orders?.customers?.full_name}
-                        </p>
-                        <p className="text-xs text-ink-400">
-                          {new Date(c.created_at).toLocaleDateString('en-NG')}
-                        </p>
+                        <p className="text-xs text-ink-400 mt-0.5">{c.logistics_requests?.orders?.customers?.full_name}</p>
+                        <p className="text-xs text-ink-400">{new Date(c.created_at).toLocaleDateString('en-NG')}</p>
                         {c.due_at && c.agent_remittance_status === 'pending' && (
                           <p className={`text-xs mt-1 font-medium ${isOverdue ? 'text-danger' : 'text-ink-400'}`}>
                             {isOverdue ? '⚠ OVERDUE' : `Due: ${new Date(c.due_at).toLocaleString('en-NG')}`}
                           </p>
                         )}
-                        {c.batch_reference && (
-                          <p className="text-xs text-brand-600 mt-1">Batch: {c.batch_reference}</p>
-                        )}
-                        {c.agent_delay_reason && (
-                          <p className="text-xs text-amber-600 mt-1">Reason: {c.agent_delay_reason}</p>
-                        )}
+                        {c.batch_reference && <p className="text-xs text-brand-600 mt-1">Batch: {c.batch_reference}</p>}
+                        {c.agent_delay_reason && <p className="text-xs text-amber-600 mt-1">Reason: {c.agent_delay_reason}</p>}
                       </div>
-                      <div className="text-right space-y-1 flex-shrink-0">
-                        <Badge status={c.agent_remittance_status} />
-                      </div>
+                      <div className="text-right space-y-1 flex-shrink-0"><Badge status={c.agent_remittance_status} /></div>
                     </div>
                     {isOverdue && !c.agent_delay_reason && (
-                      <button
-                        onClick={() => setDelayModal(c)}
-                        className="mt-3 text-xs px-3 py-1.5 rounded-lg bg-amber-50 text-amber-700 font-medium hover:bg-amber-100 w-full">
-                        Provide Delay Reason
-                      </button>
+                      <button onClick={() => setDelayModal(c)} className="mt-3 text-xs px-3 py-1.5 rounded-lg bg-amber-50 text-amber-700 font-medium hover:bg-amber-100 w-full">Provide Delay Reason</button>
                     )}
                   </div>
                 )
               })}
               {codRecords.length === 0 && (
-                <div className="text-center py-16">
-                  <p className="text-4xl mb-3">◆</p>
-                  <p className="text-ink-500 font-medium">No COD records yet</p>
-                </div>
+                <div className="text-center py-16"><p className="text-4xl mb-3">◆</p><p className="text-ink-500 font-medium">No COD records yet</p></div>
               )}
             </div>
           </div>
         )}
 
-        {/* STOCK TAB */}
         {tab === 'stock' && (
           <div>
             {lowStock.length > 0 && (
@@ -328,31 +298,19 @@ export default function AgentView() {
                 </div>
               ))}
               {stock.length === 0 && (
-                <div className="text-center py-16">
-                  <p className="text-4xl mb-3">⬡</p>
-                  <p className="text-ink-500 font-medium">No stock assigned yet</p>
-                </div>
+                <div className="text-center py-16"><p className="text-4xl mb-3">⬡</p><p className="text-ink-500 font-medium">No stock assigned yet</p></div>
               )}
             </div>
           </div>
         )}
       </div>
 
-      {/* Delay reason modal */}
       {delayModal && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl w-full max-w-sm shadow-panel p-5 space-y-4">
             <h3 className="font-semibold text-ink-900">Reason for Delay</h3>
-            <p className="text-sm text-ink-500">
-              ₦{Number(delayModal.amount).toLocaleString()} — Why has this not been remitted within 24 hours?
-            </p>
-            <textarea
-              className="input"
-              rows={3}
-              value={delayReason}
-              onChange={e => setDelayReason(e.target.value)}
-              placeholder="Explain the reason for the delay…"
-            />
+            <p className="text-sm text-ink-500">₦{Number(delayModal.amount).toLocaleString()} — Why has this not been remitted within 24 hours?</p>
+            <textarea className="input" rows={3} value={delayReason} onChange={e => setDelayReason(e.target.value)} placeholder="Explain the reason for the delay…" />
             <div className="flex gap-3">
               <button onClick={() => setDelayModal(null)} className="btn-secondary flex-1">Cancel</button>
               <button onClick={submitDelayReason} disabled={!delayReason} className="btn-primary flex-1">Submit</button>

@@ -14,6 +14,7 @@ const MERCHANT_PAGES = [
   { key: 'finance', label: 'Finance' },
   { key: 'expenses', label: 'Expenses' },
   { key: 'marketing', label: 'Marketing' },
+  { key: 'rewards', label: 'Rewards' },
   { key: 'staff', label: 'Staff' },
   { key: 'reports', label: 'Reports' },
 ]

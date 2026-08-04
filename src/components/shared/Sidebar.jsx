@@ -13,6 +13,7 @@ const MERCHANT_NAV = [
   { label: 'Stock', icon: '⬡', page: 'stock' },
   { label: 'Finance', icon: '◆', page: 'finance' },
   { label: 'Expenses', icon: '💰', page: 'expenses' },
+  { label: 'Rewards', icon: '🏆', page: 'rewards' },
   { label: 'Staff', icon: '◧', page: 'staff' },
   { label: 'Reports', icon: '▦', page: 'reports' },
 ]
@@ -25,6 +26,7 @@ const LOGISTICS_NAV = [
   { label: 'Deliveries', icon: '▣', page: 'deliveries' },
   { label: 'COD', icon: '◆', page: 'cod' },
   { label: 'Merchants', icon: '▦', page: 'merchants' },
+  { label: 'Rewards', icon: '🏆', page: 'royale_rewards' },
   { label: 'Staff', icon: '◧', page: 'royale_staff' },
   { label: 'Reports', icon: '◧', page: 'reports' },
 ]

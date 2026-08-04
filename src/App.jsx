@@ -18,6 +18,7 @@ import TasksPage from './pages/merchant/TasksPage'
 import StaffPage from './pages/merchant/StaffPage'
 import BlockedCustomersPage from './pages/merchant/BlockedCustomersPage'
 import MarketingPage from './pages/merchant/MarketingPage'
+import RewardsPage from './pages/merchant/RewardsPage'
 
 // Logistics pages
 import LogisticsDashboard from './pages/logistics/LogisticsDashboard'
@@ -28,6 +29,7 @@ import CODPage from './pages/logistics/CODPage'
 import MerchantsPage from './pages/logistics/MerchantsPage'
 import LogisticsReportsPage from './pages/logistics/LogisticsReportsPage'
 import RoyaleStaffPage from './pages/logistics/RoyaleStaffPage'
+import RoyaleRewardsPage from './pages/logistics/RoyaleRewardsPage'
 
 // Agent view
 import AgentView from './pages/agent/AgentView'
@@ -46,6 +48,7 @@ const MERCHANT_PAGES = {
   staff: StaffPage,
   blocked_customers: BlockedCustomersPage,
   marketing: MarketingPage,
+  rewards: RewardsPage,
 }
 
 const LOGISTICS_PAGES = {
@@ -57,6 +60,7 @@ const LOGISTICS_PAGES = {
   cod: CODPage,
   merchants: MerchantsPage,
   royale_staff: RoyaleStaffPage,
+  royale_rewards: RoyaleRewardsPage,
   reports: LogisticsReportsPage,
 }
 

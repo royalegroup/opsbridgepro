@@ -10,6 +10,7 @@ const LOGISTICS_PAGES = [
   { key: 'deliveries', label: 'Deliveries' },
   { key: 'cod', label: 'COD' },
   { key: 'merchants', label: 'Merchants' },
+  { key: 'royale_rewards', label: 'Rewards' },
   { key: 'royale_staff', label: 'Staff' },
   { key: 'reports', label: 'Reports' },
 ]
