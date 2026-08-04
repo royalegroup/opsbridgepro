@@ -48,3 +48,38 @@ export function exportOrdersToCSV(orders, filename) {
   document.body.removeChild(link)
   URL.revokeObjectURL(url)
 }
+
+/**
+ * Generic CSV export — takes rows already shaped as objects and a header map.
+ * headerMap: [[csvColumnLabel, rowKeyOrFn], ...]
+ */
+export function exportRowsToCSV(rows, headerMap, filename) {
+  function escape(value) {
+    if (value === null || value === undefined) return ''
+    const str = String(value)
+    if (str.includes(',') || str.includes('"') || str.includes('\n')) {
+      return `"${str.replace(/"/g, '""')}"`
+    }
+    return str
+  }
+
+  const headers = headerMap.map(([label]) => label)
+  const dataRows = rows.map(row =>
+    headerMap.map(([, key]) => typeof key === 'function' ? key(row) : row[key])
+  )
+
+  const csvContent = [
+    headers.map(escape).join(','),
+    ...dataRows.map(r => r.map(escape).join(','))
+  ].join('\n')
+
+  const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  URL.revokeObjectURL(url)
+}
