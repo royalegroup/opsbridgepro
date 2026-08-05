@@ -6,6 +6,8 @@ import { deductAgentStockOnDelivery } from '../../lib/stockHelpers'
 import { createFollowUpTask } from '../../lib/taskHelpers'
 import { createCODRecord } from '../../lib/codHelpers'
 import { awardOrderCommission } from '../../lib/rewardsHelpers'
+import { logEvent } from '../../lib/orderEventHelpers'
+import OrderTimeline from '../../components/shared/OrderTimeline'
 
 export default function AgentView() {
   const { profile, signOut } = useAuth()
@@ -17,6 +19,7 @@ export default function AgentView() {
   const [delayModal, setDelayModal] = useState(null)
   const [delayReason, setDelayReason] = useState('')
   const [saving, setSaving] = useState(false)
+  const [timelineOrderId, setTimelineOrderId] = useState(null)
 
   useEffect(() => { if (profile?.id) load() }, [profile])
 
@@ -53,6 +56,13 @@ export default function AgentView() {
       await supabase.from('orders').update({ status: orderStatus }).eq('id', req.order_id)
     }
 
+    if (status === 'out_for_delivery' && req?.order_id) {
+      await logEvent({ orderId: req.order_id, eventType: 'out_for_delivery', description: `${profile.full_name} is out for delivery`, actorId: profile.id, visibilityLevel: 'public' })
+    }
+    if (status === 'failed' && req?.order_id) {
+      await logEvent({ orderId: req.order_id, eventType: 'delivery_failed', description: 'Delivery attempt failed', actorId: profile.id, visibilityLevel: 'public' })
+    }
+
     if (status === 'delivered' && req?.order_id && agent?.id) {
       await deductAgentStockOnDelivery(req.order_id, agent.id)
 
@@ -64,6 +74,8 @@ export default function AgentView() {
 
       if (order && agent) {
         await createCODRecord(id, agent.id, agent.logistics_id, order.merchant_id, order.total_amount)
+
+        await logEvent({ orderId: req.order_id, eventType: 'delivered', description: `Delivered by ${profile.full_name}`, actorId: profile.id, visibilityLevel: 'public' })
 
         // Award CS Rep commission on the merchant side (if an active rule exists)
         if (order.assigned_cs_rep) {
@@ -85,6 +97,8 @@ export default function AgentView() {
           department: 'logistics',
           order: { id: req.order_id, total_amount: order.total_amount },
         })
+
+        await logEvent({ orderId: req.order_id, eventType: 'commission_awarded', description: 'Commissions calculated for this delivery', actorId: profile.id, visibilityLevel: 'internal' })
       }
 
       const { data: fullOrder } = await supabase
@@ -203,6 +217,9 @@ export default function AgentView() {
                           </>
                         )}
                       </div>
+                      <button onClick={() => setTimelineOrderId(d.order_id)} className="text-xs text-brand-600 font-medium mt-2 hover:underline">
+                        🕐 View Timeline
+                      </button>
                     </div>
                   ))}
                 </div>
@@ -317,6 +334,10 @@ export default function AgentView() {
             </div>
           </div>
         </div>
+      )}
+
+      {timelineOrderId && (
+        <OrderTimeline orderId={timelineOrderId} onClose={() => setTimelineOrderId(null)} />
       )}
     </div>
   )

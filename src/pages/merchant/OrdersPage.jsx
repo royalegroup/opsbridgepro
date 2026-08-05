@@ -5,6 +5,8 @@ import Badge from '../../components/shared/Badge'
 import { createFollowUpTask } from '../../lib/taskHelpers'
 import ReceiptModal from '../../components/merchant/ReceiptModal'
 import { exportOrdersToCSV } from '../../lib/csvExport'
+import { logEvent } from '../../lib/orderEventHelpers'
+import OrderTimeline from '../../components/shared/OrderTimeline'
 
 const STATUSES = ['all', 'new', 'assigned', 'confirmed', 'sent_to_logistics', 'in_transit', 'delivered', 'failed', 'cancelled']
 const NIGERIAN_STATES = ['Abia','Adamawa','Akwa Ibom','Anambra','Bauchi','Bayelsa','Benue','Borno','Cross River','Delta','Ebonyi','Edo','Ekiti','Enugu','FCT','Gombe','Imo','Jigawa','Kaduna','Kano','Katsina','Kebbi','Kogi','Kwara','Lagos','Nasarawa','Niger','Ogun','Ondo','Osun','Oyo','Plateau','Rivers','Sokoto','Taraba','Yobe','Zamfara']
@@ -23,6 +25,7 @@ export default function OrdersPage() {
   const [showForm, setShowForm] = useState(false)
   const [editOrder, setEditOrder] = useState(null)
   const [receiptOrder, setReceiptOrder] = useState(null)
+  const [timelineOrderId, setTimelineOrderId] = useState(null)
   const [deleteConfirm, setDeleteConfirm] = useState(null)
   const [deleteError, setDeleteError] = useState('')
   const [form, setForm] = useState({ customer_id: '', product_id: '', quantity: 1, delivery_state: '', source: 'manual', notes: '' })
@@ -135,6 +138,14 @@ export default function OrdersPage() {
         unit_delivery_fee: product.delivery_fee,
       })
 
+      await logEvent({
+        orderId: editOrder.id,
+        eventType: 'order_edited',
+        description: `Order details edited by ${profile.full_name}`,
+        actorId: profile.id,
+        visibilityLevel: 'internal',
+      })
+
       setShowForm(false)
       setEditOrder(null)
       loadAll()
@@ -160,6 +171,16 @@ export default function OrdersPage() {
           unit_cost_price: product.cost_price,
           unit_delivery_fee: product.delivery_fee,
         })
+
+        const customerName = customers.find(c => c.id === form.customer_id)?.full_name || 'customer'
+        await logEvent({
+          orderId: orderData.id,
+          eventType: 'order_created',
+          description: `Order created for ${customerName}`,
+          actorId: profile.id,
+          visibilityLevel: 'public',
+        })
+
         setShowForm(false)
         setForm({ customer_id: '', product_id: '', quantity: 1, delivery_state: '', source: 'manual', notes: '' })
         loadAll()
@@ -185,6 +206,8 @@ export default function OrdersPage() {
     const { data: order } = await supabase.from('orders').select('*, customers(full_name, phone)').eq('id', orderId).single()
 
     if (status === 'confirmed' && order) {
+      await logEvent({ orderId, eventType: 'order_confirmed', description: 'Order confirmed by CS Rep', actorId: profile.id, visibilityLevel: 'public' })
+
       const link = await supabase.from('merchant_logistics_links').select('logistics_id').eq('merchant_id', profile.business_id).eq('is_active', true).single()
       if (link.data) {
         await supabase.from('logistics_requests').insert({
@@ -192,8 +215,14 @@ export default function OrdersPage() {
           delivery_state: order?.delivery_state, status: 'pending'
         })
         await supabase.from('orders').update({ status: 'sent_to_logistics' }).eq('id', orderId)
+        await logEvent({ orderId, eventType: 'sent_to_logistics', description: 'Sent to logistics partner for delivery', actorId: profile.id, visibilityLevel: 'public' })
       }
     }
+
+    if (status === 'cancelled') {
+      await logEvent({ orderId, eventType: 'order_cancelled', description: `Order cancelled by ${profile.full_name}`, actorId: profile.id, visibilityLevel: 'public' })
+    }
+
     if ((status === 'delivered' || status === 'failed') && order) {
       await createFollowUpTask(order, status, profile.business_id)
     }
@@ -202,6 +231,8 @@ export default function OrdersPage() {
 
   async function assignRep(orderId, repId) {
     await supabase.from('orders').update({ assigned_cs_rep: repId, status: 'assigned' }).eq('id', orderId)
+    const rep = csReps.find(r => r.id === repId)
+    await logEvent({ orderId, eventType: 'assigned_rep', description: `Assigned to ${rep?.full_name || 'CS Rep'}`, actorId: profile.id, visibilityLevel: 'public' })
     loadAll()
   }
 
@@ -286,6 +317,10 @@ export default function OrdersPage() {
                     </div>
                   </div>
 
+                  <button onClick={() => setTimelineOrderId(order.id)} className="text-xs text-brand-600 font-medium mt-1.5 hover:underline">
+                    🕐 View Timeline
+                  </button>
+
                   {(order.status === 'new' || order.status === 'assigned') && (
                     <div className="flex gap-2 mt-3 flex-wrap">
                       {order.status === 'new' && csReps.length > 0 && !isScoped && (
@@ -334,6 +369,10 @@ export default function OrdersPage() {
 
       {receiptOrder && (
         <ReceiptModal order={receiptOrder} business={profile?.businesses} onClose={() => setReceiptOrder(null)} />
+      )}
+
+      {timelineOrderId && (
+        <OrderTimeline orderId={timelineOrderId} onClose={() => setTimelineOrderId(null)} />
       )}
 
       {/* New/Edit Order Modal */}

@@ -6,6 +6,8 @@ import { deductAgentStockOnDelivery } from '../../lib/stockHelpers'
 import { createFollowUpTask } from '../../lib/taskHelpers'
 import { createCODRecord } from '../../lib/codHelpers'
 import { awardOrderCommission } from '../../lib/rewardsHelpers'
+import { logEvent } from '../../lib/orderEventHelpers'
+import OrderTimeline from '../../components/shared/OrderTimeline'
 
 export default function RequestsPage() {
   const { profile } = useAuth()
@@ -13,6 +15,7 @@ export default function RequestsPage() {
   const [agents, setAgents] = useState([])
   const [filter, setFilter] = useState('all')
   const [failReason, setFailReason] = useState({})
+  const [timelineOrderId, setTimelineOrderId] = useState(null)
 
   useEffect(() => { if (profile?.business_id) load() }, [profile])
 
@@ -33,6 +36,11 @@ export default function RequestsPage() {
     await supabase.from('logistics_requests')
       .update({ assigned_agent: agentId, status: 'assigned', assigned_at: new Date().toISOString() })
       .eq('id', requestId)
+    const req = requests.find(r => r.id === requestId)
+    const agent = agents.find(a => a.id === agentId)
+    if (req?.orders?.id) {
+      await logEvent({ orderId: req.orders.id, eventType: 'agent_assigned', description: `Assigned to delivery agent ${agent?.users?.full_name || ''}`, actorId: profile.id, visibilityLevel: 'public' })
+    }
     load()
   }
 
@@ -50,6 +58,13 @@ export default function RequestsPage() {
       await supabase.from('orders').update({ status: orderStatus }).eq('id', req.orders.id)
     }
 
+    if (status === 'out_for_delivery' && req?.orders?.id) {
+      await logEvent({ orderId: req.orders.id, eventType: 'out_for_delivery', description: 'Agent is out for delivery', actorId: profile.id, visibilityLevel: 'public' })
+    }
+    if (status === 'failed' && req?.orders?.id) {
+      await logEvent({ orderId: req.orders.id, eventType: 'delivery_failed', description: reason ? `Delivery attempt failed: ${reason}` : 'Delivery attempt failed', actorId: profile.id, visibilityLevel: 'public' })
+    }
+
     if (status === 'delivered' && req?.orders?.id && req?.agents?.id) {
       await deductAgentStockOnDelivery(req.orders.id, req.agents.id)
     }
@@ -62,6 +77,8 @@ export default function RequestsPage() {
         .single()
       if (order) {
         await createCODRecord(requestId, req.agents.id, profile.business_id, order.merchant_id, order.total_amount)
+
+        await logEvent({ orderId: req.orders.id, eventType: 'delivered', description: 'Order delivered successfully', actorId: profile.id, visibilityLevel: 'public' })
 
         // Award CS Rep commission on the merchant side (if an active rule exists)
         if (order.assigned_cs_rep) {
@@ -85,6 +102,8 @@ export default function RequestsPage() {
             order: { id: req.orders.id, total_amount: order.total_amount },
           })
         }
+
+        await logEvent({ orderId: req.orders.id, eventType: 'commission_awarded', description: 'Commissions calculated for this delivery', actorId: profile.id, visibilityLevel: 'internal' })
       }
     }
 
@@ -151,6 +170,10 @@ export default function RequestsPage() {
                   <p className="text-xs text-ink-500">Agent: <span className="font-medium">{r.agents?.users?.full_name}</span></p>
                 )}
 
+                <button onClick={() => setTimelineOrderId(r.orders?.id)} className="text-xs text-brand-600 font-medium hover:underline">
+                  🕐 View Timeline
+                </button>
+
                 {r.status === 'pending' && (
                   <select
                     onChange={e => assignAgent(r.id, e.target.value)}
@@ -202,6 +225,10 @@ export default function RequestsPage() {
           </div>
         )}
       </div>
+
+      {timelineOrderId && (
+        <OrderTimeline orderId={timelineOrderId} onClose={() => setTimelineOrderId(null)} />
+      )}
     </div>
   )
 }
