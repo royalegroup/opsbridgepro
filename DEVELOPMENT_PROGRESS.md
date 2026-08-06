@@ -136,13 +136,24 @@ Wired into the core lifecycle at: order created, order edited (internal), assign
 
 **Not yet instrumented (follow-up polish, not blocking):** task outcome changes, stock adjustments, receipt generation, blocklist-match warnings, and anything at the `management` visibility tier (no such actions exist in the app yet — the tier is filter-ready but has no auto-generated events). Add these opportunistically as those flows are touched again, not as a dedicated task.
 
-### ⬜ B2. Notifications UI — next
-Schema (`notifications` table) exists from Phase 1 but has zero UI. Plan: build a bell/inbox component (likely in the Sidebar user area), mark-as-read capability, and wire `notifications` inserts at the same event points already instrumented for Order Timeline (reuse the same call sites in OrdersPage/RequestsPage/AgentView rather than re-deriving trigger points). Respect the same visibility tiering so scoped staff/agents don't get notified about internal-only events.
+### ✅ B2. Notifications UI — COMPLETE (core), partial trigger coverage
+Built `notificationHelpers.js` (`notify()` — fire-and-forget like `logEvent`; `getBusinessOwnerId()` — fallback recipient for business-level alerts with no specific staff target) and `NotificationBell.jsx` (unread-count badge, dropdown list, click-to-mark-read, mark-all-read), wired into `Sidebar.jsx` for both desktop and mobile. Notifications are inherently recipient-scoped (`recipient_id`) so no additional visibility-tier filtering was needed on top, unlike Order Timeline.
 
-### ⬜ B3. Tasks scheduling/reminder extension — after Notifications
+**Trigger points wired this pass:** agent assigned a delivery → notifies the agent; order delivered → notifies the assigned CS Rep; delivery failed → notifies the assigned CS Rep; COD overdue alert sent (merchant → Royale) → notifies the Royale business owner. Wired into `RequestsPage.jsx`, `AgentView.jsx`, `FinancePage.jsx`.
+
+**Deliberately not wired this pass (verify current file state before touching):** `taskHelpers.js` — task escalation should notify the manager it's escalated to; Royale's `CODPage.jsx` — the agent-side overdue alert (Royale → agent) should notify that agent, mirroring the merchant-side one that *was* wired. Both were skipped because this session's sandbox didn't have current state for those two files, and per `AI_RULES.md` (never regenerate a file you can't verify against the live version), guessing was judged riskier than leaving a documented gap. **Do these two next** — they're small, additive edits once the current file content is confirmed.
+
+### ⬜ B3. Tasks scheduling/reminder extension — after closing the two notification gaps above
 Add reminder-timing fields, derive Upcoming/Due Today/Due Tomorrow/Overdue from `due_date`, model reschedule scenarios as task outcomes, build the three role-specific dashboards (CS/Royale/Merchant) from the user's original spec (full scenario details in chat history: customer requesting Friday delivery, agent rescheduling to Tuesday).
 
-Start with Notifications UI next.
+Next: close the `taskHelpers.js` escalation-notification and Royale `CODPage.jsx` agent-alert-notification gaps, then move to B3.
+
+---
+
+## 8. Governance Documents
+Two additional permanent reference docs were created alongside this one and must be kept in sync:
+- **`docs/PROJECT_ARCHITECTURE.md`** — stable technical reference (system design, full schema, module architecture, business rules, coding standards). Update only when something architectural changes, not for routine feature work.
+- **`docs/AI_RULES.md`** — the development constitution every session must follow (core principles, how to resume after a reset, how to generate handoffs, how to debug, how to decide new-module-vs-extend). Read this file, then `PROJECT_ARCHITECTURE.md`, then this progress doc, in that order, at the start of any session.
 
 ---
 
