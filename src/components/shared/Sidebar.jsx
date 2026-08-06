@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useAuth } from '../../contexts/AuthContext'
+import NotificationBell from './NotificationBell'
 
 const MERCHANT_NAV = [
   { label: 'Dashboard', icon: '◈', page: 'dashboard' },
@@ -49,10 +50,11 @@ export default function Sidebar({ activePage, onNavigate, businessType }) {
         <div className="px-4 py-5 border-b border-surface-200">
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 rounded-xl bg-brand-600 flex items-center justify-center text-white font-bold text-sm flex-shrink-0">◈</div>
-            <div className="min-w-0">
+            <div className="min-w-0 flex-1">
               <p className="font-bold text-ink-900 text-sm leading-tight">OpsBridge Pro</p>
               <p className="text-xs text-ink-400 truncate">{businessType === 'merchant' ? '🛍' : '🚚'} {profile?.businesses?.name}</p>
             </div>
+            <NotificationBell />
           </div>
         </div>
 
@@ -93,7 +95,10 @@ export default function Sidebar({ activePage, onNavigate, businessType }) {
           <div className="w-7 h-7 rounded-lg bg-brand-600 flex items-center justify-center text-white text-xs font-bold">◈</div>
           <span className="font-bold text-ink-900 text-sm">OpsBridge Pro</span>
         </div>
-        <button onClick={() => setMobileOpen(true)} className="w-9 h-9 flex items-center justify-center rounded-xl bg-surface-100 text-ink-700">☰</button>
+        <div className="flex items-center gap-1">
+          <NotificationBell />
+          <button onClick={() => setMobileOpen(true)} className="w-9 h-9 flex items-center justify-center rounded-xl bg-surface-100 text-ink-700">☰</button>
+        </div>
       </div>
 
       {mobileOpen && (

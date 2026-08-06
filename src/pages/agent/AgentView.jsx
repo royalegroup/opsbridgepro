@@ -7,6 +7,7 @@ import { createFollowUpTask } from '../../lib/taskHelpers'
 import { createCODRecord } from '../../lib/codHelpers'
 import { awardOrderCommission } from '../../lib/rewardsHelpers'
 import { logEvent } from '../../lib/orderEventHelpers'
+import { notify } from '../../lib/notificationHelpers'
 import OrderTimeline from '../../components/shared/OrderTimeline'
 
 export default function AgentView() {
@@ -61,6 +62,17 @@ export default function AgentView() {
     }
     if (status === 'failed' && req?.order_id) {
       await logEvent({ orderId: req.order_id, eventType: 'delivery_failed', description: 'Delivery attempt failed', actorId: profile.id, visibilityLevel: 'public' })
+      if (req.orders?.assigned_cs_rep) {
+        await notify({
+          recipientId: req.orders.assigned_cs_rep,
+          businessId: req.orders.merchant_id,
+          type: 'delivery_failed',
+          title: 'Delivery failed — action needed',
+          message: `Delivery to ${req.orders.customers?.full_name || 'customer'} failed.`,
+          referenceId: req.order_id,
+          referenceType: 'order',
+        })
+      }
     }
 
     if (status === 'delivered' && req?.order_id && agent?.id) {
@@ -76,6 +88,18 @@ export default function AgentView() {
         await createCODRecord(id, agent.id, agent.logistics_id, order.merchant_id, order.total_amount)
 
         await logEvent({ orderId: req.order_id, eventType: 'delivered', description: `Delivered by ${profile.full_name}`, actorId: profile.id, visibilityLevel: 'public' })
+
+        if (order.assigned_cs_rep) {
+          await notify({
+            recipientId: order.assigned_cs_rep,
+            businessId: order.merchant_id,
+            type: 'delivery_update',
+            title: 'Order delivered ✓',
+            message: `${order.customers?.full_name || 'Customer'}'s order was delivered successfully.`,
+            referenceId: req.order_id,
+            referenceType: 'order',
+          })
+        }
 
         // Award CS Rep commission on the merchant side (if an active rule exists)
         if (order.assigned_cs_rep) {

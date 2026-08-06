@@ -4,6 +4,7 @@ import { useAuth } from '../../contexts/AuthContext'
 import StatCard from '../../components/shared/StatCard'
 import Badge from '../../components/shared/Badge'
 import { computeMonthlyRollup, computeTrend, pctChange, monthKey, monthLabel, previousMonthKey } from '../../lib/financeRollupHelpers'
+import { notify, getBusinessOwnerId } from '../../lib/notificationHelpers'
 
 function fmtNaira(n) {
   if (n === null || n === undefined) return '—'
@@ -88,6 +89,18 @@ export default function FinancePage() {
 
   async function alertLogistics(remittance) {
     await supabase.from('cod_remittances').update({ overdue_alert_sent: true }).eq('id', remittance.id)
+    const ownerId = await getBusinessOwnerId(remittance.logistics_id)
+    if (ownerId) {
+      await notify({
+        recipientId: ownerId,
+        businessId: remittance.logistics_id,
+        type: 'cod_overdue',
+        title: 'Overdue COD remittance ⚠',
+        message: `₦${Number(remittance.amount).toLocaleString()} is overdue for settlement to a merchant.`,
+        referenceId: remittance.id,
+        referenceType: 'cod_remittance',
+      })
+    }
     load()
   }
 

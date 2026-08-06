@@ -7,6 +7,7 @@ import { createFollowUpTask } from '../../lib/taskHelpers'
 import { createCODRecord } from '../../lib/codHelpers'
 import { awardOrderCommission } from '../../lib/rewardsHelpers'
 import { logEvent } from '../../lib/orderEventHelpers'
+import { notify } from '../../lib/notificationHelpers'
 import OrderTimeline from '../../components/shared/OrderTimeline'
 
 export default function RequestsPage() {
@@ -41,6 +42,17 @@ export default function RequestsPage() {
     if (req?.orders?.id) {
       await logEvent({ orderId: req.orders.id, eventType: 'agent_assigned', description: `Assigned to delivery agent ${agent?.users?.full_name || ''}`, actorId: profile.id, visibilityLevel: 'public' })
     }
+    if (agent?.user_id) {
+      await notify({
+        recipientId: agent.user_id,
+        businessId: profile.business_id,
+        type: 'agent_assigned',
+        title: 'New delivery assigned',
+        message: `You've been assigned a delivery in ${req?.orders?.delivery_state || 'your state'}.`,
+        referenceId: requestId,
+        referenceType: 'logistics_request',
+      })
+    }
     load()
   }
 
@@ -63,6 +75,17 @@ export default function RequestsPage() {
     }
     if (status === 'failed' && req?.orders?.id) {
       await logEvent({ orderId: req.orders.id, eventType: 'delivery_failed', description: reason ? `Delivery attempt failed: ${reason}` : 'Delivery attempt failed', actorId: profile.id, visibilityLevel: 'public' })
+      if (req.orders.assigned_cs_rep) {
+        await notify({
+          recipientId: req.orders.assigned_cs_rep,
+          businessId: req.orders.merchant_id,
+          type: 'delivery_failed',
+          title: 'Delivery failed — action needed',
+          message: reason ? `Delivery to ${req.orders.customers?.full_name || 'customer'} failed: ${reason}` : `Delivery to ${req.orders.customers?.full_name || 'customer'} failed.`,
+          referenceId: req.orders.id,
+          referenceType: 'order',
+        })
+      }
     }
 
     if (status === 'delivered' && req?.orders?.id && req?.agents?.id) {
@@ -79,6 +102,18 @@ export default function RequestsPage() {
         await createCODRecord(requestId, req.agents.id, profile.business_id, order.merchant_id, order.total_amount)
 
         await logEvent({ orderId: req.orders.id, eventType: 'delivered', description: 'Order delivered successfully', actorId: profile.id, visibilityLevel: 'public' })
+
+        if (order.assigned_cs_rep) {
+          await notify({
+            recipientId: order.assigned_cs_rep,
+            businessId: order.merchant_id,
+            type: 'delivery_update',
+            title: 'Order delivered ✓',
+            message: `${order.customers?.full_name || 'Customer'}'s order was delivered successfully.`,
+            referenceId: req.orders.id,
+            referenceType: 'order',
+          })
+        }
 
         // Award CS Rep commission on the merchant side (if an active rule exists)
         if (order.assigned_cs_rep) {
