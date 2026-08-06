@@ -1,0 +1,154 @@
+# OpsBridge Pro — Development Progress & Handoff
+
+**Last updated:** After completing the Rewards & Commissions engine (Phase 2)
+**Purpose:** Any Claude session (or developer) should be able to read this file and resume work immediately without re-analyzing the codebase or re-asking the user for context already established.
+
+---
+
+## 1. Project Overview
+
+**OpsBridge Pro** is a multi-tenant operations platform bridging e-commerce and logistics, built for:
+- **GlowMedals** — a Nigerian e-commerce merchant (Pay-on-Delivery model, Meta/TikTok ads)
+- **Royale Logistics** — a logistics company serving GlowMedals and (in future) other merchants, with delivery agents across Nigeria's 36 states
+
+Both businesses run inside the same codebase/app, with role-based dashboards determined by `business_type` (`merchant` vs `logistics`).
+
+**Live URL:** opsbridgepro.pages.dev
+**Repo:** github.com/royalegroup/opsbridgepro (branch: `main`)
+**Hosting:** Cloudflare Pages, auto-deploys on push to `main`
+**Database:** Supabase (Postgres + Auth)
+
+---
+
+## 2. Tech Stack & Architecture
+
+- **Frontend:** React + Vite, Tailwind CSS (custom brand/surface/ink color tokens in `tailwind.config.js`)
+- **Backend:** Supabase — Postgres tables, Supabase Auth for login, no custom backend server
+- **PDF generation:** `jspdf` (client-side, for receipts)
+- **Deployment:** Cloudflare Pages, build command `npm run build`, output `dist`
+
+### Key architectural decisions
+- **Multi-tenancy:** `businesses` table (type: `merchant`/`logistics`/`both`), `users.business_id` + `users.business_type` scope everything per business.
+- **Auth:** Custom **username login** — `AuthContext.signInWithUsername()` looks up `users.email` by username, then calls Supabase `signInWithPassword`. Staff without a real email get a placeholder (`staff_xxx@opsbridgepro.internal` or `.app`) until real credentials are set via the Staff page's "Set Login Credentials" flow.
+- **Permissions:** `users.permissions` (text array of page keys, empty array = full access) controls sidebar/page visibility. `users.scope_own_records` (boolean) controls **data isolation** — scoped staff (e.g. CS Reps) only see orders/customers/tasks assigned to or created by them, and cannot use "+ New Order"/"+ Add Customer" buttons (prevents self-assignment abuse).
+- **Roles are free text**, normalized to `lowercase_snake_case` on save — not a fixed enum. Any role name works; permission presets exist as UI shortcuts only.
+- **RLS is disabled on all tables** — access control is enforced entirely in application code via `business_id`/`scope_own_records` filtering, not Postgres RLS. **This is a known gap, not yet hardened for production security.**
+- **Bundles use price snapshotting** (`cost_price_snapshot`, `selling_price_snapshot` on `bundle_items`) so historical profit reports don't silently drift when a linked product's price changes later. A manual "Resync Prices" button exists for when drift is wanted.
+- **Rewards/Commissions use a generic ledger** (`rewards` table with `reward_type` enum: commission/bonus/incentive) so future bonus/incentive features extend the same table rather than requiring new ones.
+
+---
+
+## 3. Database Schema (all tables, as of this update)
+
+Core:
+- `businesses`, `users` (+ `username`, `permissions text[]`, `scope_own_records boolean`), `merchant_logistics_links`
+
+GlowMedals (merchant) side:
+- `products`, `customers` (+ `created_by`), `orders`, `order_items`
+- `product_bundles`, `bundle_items` (+ `cost_price_snapshot`, `selling_price_snapshot`, `custom_name`, `custom_cost_price` — `product_id` is nullable to support standalone bundle items not tied to the product catalogue)
+- `expenses` (+ `campaign_id`) — categories: ads/waybill/staff/office/miscellaneous/custom
+- `campaigns` — marketing campaigns, optionally linked to a product and/or order source for ROAS attribution
+- `blocked_customers` — fraud/COD-rejection blocklist, checked by phone at order creation
+- `merchant_stock`, `merchant_stock_receipts` — GlowMedals' own on-hand inventory (separate from Royale's side), with dispatch validated against and deducted from this balance
+- `tasks` (+ `outcome`, `outcome_notes`, `next_action`, `escalation_reason`, `escalated_at`, `follow_up_date`, `completed_by`) — auto-created on order delivered/failed
+- `receipts` — tracks generated receipts (PDF/WhatsApp), linked to orders
+
+Royale (logistics) side:
+- `agents`, `logistics_requests`, `stock_dispatches`, `agent_stock`, `royale_stock` (running balance, prevents over-dispatch to agents)
+- `cod_remittances` (+ `due_at`, `overdue_alert_sent`, `agent_delay_reason`, `batch_reference`, `royale_batch_reference`) — 24hr remittance timeline
+- `royale_stock_reports`, `royale_stock_report_items` — monthly stock snapshots published to a merchant for reconciliation
+
+Shared / cross-cutting:
+- `notifications` — schema exists, **no UI built yet** (unused so far)
+- `commission_rules` — flat / percent_order / percent_profit, targetable by role or specific staff, business-scoped (works for both merchant and logistics businesses)
+- `rewards` — the universal ledger (columns: `business_id`, `staff_id`, `department`, `role_snapshot`, `reward_type`, `related_order_id`, `related_campaign_id`, `calculation_method`, `rate_snapshot`, `amount_earned`, `amount_paid`, `status`, `notes`, `reversed_reason`, `approved_by/at`, `paid_at`, timestamps)
+- `reward_payments` — payment history/audit trail against a reward (supports partial/batch payments)
+
+**⚠️ Cleanup note:** During this session we found and removed a duplicate/conflicting parallel implementation from an earlier context-reset session: a `commission_rates` table (dropped, empty), a `RewardsLedger.jsx` component (deleted, unused), and a `commissionHelpers.js` file (deleted, unused). If a *future* session ever finds files/tables that don't match this doc, **check before building** — don't assume you invented it fresh.
+
+**⚠️ Verify-before-handoff note:** The initial Rewards handoff assumed `exportRowsToCSV` already existed in the live `csvExport.js` (it existed in the sandbox from a prior reset session, but was never actually pushed). This caused a Cloudflare build failure (`MISSING_EXPORT`) that had to be hotfixed. Lesson: sandbox file state is not proof of live repo state — when reusing a "shared" helper across a build, hand over that helper file too rather than assuming it's already deployed.
+
+All tables have **RLS disabled**.
+
+---
+
+## 4. Feature Status
+
+### ✅ Phase 1 — Foundation (complete)
+- Multi-tenant auth & dashboards for both businesses
+- Full order pipeline: GlowMedals order → confirm → auto-creates logistics request → Royale assigns agent → out for delivery → delivered/failed
+- Stock pipeline: GlowMedals dispatches → Royale confirms receipt → distributes to agent → deducted on delivery
+- COD pipeline: auto-created on delivery → agent batch remits → Royale confirms → batch settles to merchant
+- Agent mobile view (deliveries, COD, stock)
+- Staff management with permissions, username login, Remember Me, password change (both businesses)
+- Data scope isolation (`scope_own_records`) for staff privacy/security
+- Product edit/delete (dependency-safe — blocks delete if used in orders/bundles, offers deactivate instead)
+- Product bundles (with price snapshotting + standalone/custom items not in the product catalogue)
+- Task module: auto-created on delivered/failed orders, outcome-based workflow (Customer Satisfied / Ready to Reorder / Escalate / etc.), auto-reorder creation, escalation to manager
+- Customer receipts: PDF (jsPDF, branded) + WhatsApp text, tracked in `receipts` table
+- Royale Staff module mirroring GlowMedals (password change, credentials, role permissions)
+
+### ✅ Phase 2 (in progress)
+- **Blocked Customers** — merchant-side blocklist checked at order creation, manager override with audit trail
+- **Ads Spend Tracking + Marketing Dashboard** — campaigns (optionally linked to product/source for attribution), ROAS/CAC/gross-profit calculations, platform & top-product breakdowns, ROAS ranking; ad spend logged as an Expense (category=ads) linked to a campaign, not a separate system
+- **CSV Export** — Orders page, "Export Current View" (respects status filter) vs "Export All" (respects data scope, ignores status filter)
+- **State Insights** — added as a section within the existing Reports page (not a new top-level module, per explicit decision): orders/revenue/gross-profit/success-rate/fail-rate/avg-delivery-time/top-product/active-customers per state. Avg delivery time computed from `logistics_requests.assigned_at → delivered_at`. Agent workload/coverage-gap fields are explicitly marked "Coming soon" (honest placeholder, not faked) pending a future merchant↔logistics data link.
+- **Monthly Finance Rollup** — second tab inside the Finance page (not a new sidebar item). Full P&L: revenue, COGS, gross profit, delivery fees, opex by category, net profit, margin, COD settled/pending, outstanding receivables (live balance, not month-locked), AOV, new customers. Month-over-month % deltas. 12-month trend (custom lightweight SVG line chart, no new dependency). Drill-down modals on Revenue/Expenses. Refunds/Returns explicitly shown as "Not yet tracked" — **no returns/refunds data model exists yet**.
+- **Rewards & Commissions engine** — just completed. Generic `rewards` ledger designed to extend into a full Rewards & Incentives platform later (marketing KPI incentives, bonuses, approval workflows) without redesign. Phase 2 scope: flat/percent-of-order/percent-of-profit commission rules, targetable by role or specific staff; auto-awarded (idempotent) when an order is marked `delivered`, for both the assigned CS Rep (merchant side) and the delivering Agent (logistics side); full ledger with Earned→Approved→Paid workflow, manual Reverse (with reason) as the hook point for future automated Returns/Refunds integration; Ledger/Rules/Reports tabs on **both** GlowMedals (`RewardsPage.jsx`) and Royale (`RoyaleRewardsPage.jsx`); CSV export.
+- **Merchant Stock Inventory** — GlowMedals now has real on-hand inventory (`merchant_stock`), separate from Royale's side. "Record Stock In" (supplier/production/return/adjustment), dispatch-to-Royale now validates against and deducts from this balance (blocks over-dispatch, same pattern as Royale→Agent), and a Reconciliation view (On Hand vs Sent vs Royale-Confirmed, flags mismatches). Royale can "Publish Monthly Stock Report" — a snapshot (warehouse + optionally agent-held stock) visible read-only to the merchant, without exposing per-agent detail.
+
+### ⬜ Phase 2 — remaining
+1. **Automatic Order Assignment** — round-robin routing to available CS Reps/closers, configurable working hours, auto-pause outside hours
+2. **Cart Abandoned Tracking** — needs a "lead"/pre-order concept that doesn't exist yet (currently orders are only created once a customer is confirmed)
+3. **Form Analytics** — needs ad/lead source instrumentation beyond what currently exists
+4. **Mobile App View** — a dedicated lightweight mobile view for managers/owners (the Agent view is already mobile-optimized; manager dashboards are currently responsive-desktop-first only)
+
+### 🔮 Future Phase — explicitly deferred (not started)
+Agreed with the user to build this *after* the commission core is stable and tested:
+- Marketing/Creative team KPI-based incentives (ROAS/revenue/profit/order targets)
+- Company-wide bonus programs (monthly/quarterly/annual, referral, discretionary)
+- Manager approval workflows for incentives
+- No-code configuration UI for incentive rules
+- Advanced rewards analytics/dashboards beyond what Phase 2 built
+
+---
+
+## 5. Known Issues / Technical Debt
+
+- **RLS disabled everywhere.** Fine for current single-team usage; must be addressed before onboarding external/untrusted users or other merchants.
+- **No automated tests.** All verification has been manual (user testing in the live app) plus brace/paren syntax sanity checks during generation.
+- **Sandbox/session resets lose in-progress file state.** This is *why this document exists* — always check this file first in a new session before rebuilding anything, and check the live repo for what's actually deployed rather than assuming.
+- **`notifications` table exists but has no UI.** Either build it or remove it — currently dead schema.
+- Refunds/Returns has no data model — several features (Monthly Rollup, commission reversal) have honest placeholders waiting on this.
+- Cross-business analytics (Royale's agent workload/coverage visible from GlowMedals' State Insights) is explicitly deferred, not forgotten.
+
+---
+
+## 6. Exact Next Step
+
+### ✅ A. Merchant Stock Inventory — COMPLETE
+Built: `merchant_stock`, `merchant_stock_receipts`, `royale_stock_reports`, `royale_stock_report_items` tables. GlowMedals Stock page now has 3 tabs (Inventory/Dispatches/Royale Reports) — on-hand tracking via "Record Stock In", dispatch now validates against and deducts from on-hand balance (blocks over-dispatch), and a Reconciliation view flags mismatches between On Hand / Sent / Royale-Confirmed. Royale's Stock Management page gained a "Publish Monthly Report" action that snapshots their stock (warehouse + optionally agent-held) for a merchant to view read-only.
+
+### ✅ B1. Order Timeline — COMPLETE
+Built `order_events` table with 3-tier visibility (`public`/`internal`/`management`), filtered client-side using existing signals (owner sees all, non-scoped staff sees public+internal, scoped staff/agents see public only — no new permission system introduced). `orderEventHelpers.js` provides `logEvent()` (fire-and-forget, never blocks the calling action) and `getVisibleEvents()`. Shared `OrderTimeline.jsx` modal component renders the filtered, chronological log with icons per event type and an "Internal"/"Management" badge visible only to those who can see those tiers.
+
+Wired into the core lifecycle at: order created, order edited (internal), assigned to CS rep, confirmed, sent to logistics, agent assigned, out for delivery, delivered, delivery failed, cancelled, commission awarded (internal). Present on GlowMedals Orders, Royale Requests, and the Agent view — each has a "🕐 View Timeline" button per order/delivery.
+
+**Not yet instrumented (follow-up polish, not blocking):** task outcome changes, stock adjustments, receipt generation, blocklist-match warnings, and anything at the `management` visibility tier (no such actions exist in the app yet — the tier is filter-ready but has no auto-generated events). Add these opportunistically as those flows are touched again, not as a dedicated task.
+
+### ⬜ B2. Notifications UI — next
+Schema (`notifications` table) exists from Phase 1 but has zero UI. Plan: build a bell/inbox component (likely in the Sidebar user area), mark-as-read capability, and wire `notifications` inserts at the same event points already instrumented for Order Timeline (reuse the same call sites in OrdersPage/RequestsPage/AgentView rather than re-deriving trigger points). Respect the same visibility tiering so scoped staff/agents don't get notified about internal-only events.
+
+### ⬜ B3. Tasks scheduling/reminder extension — after Notifications
+Add reminder-timing fields, derive Upcoming/Due Today/Due Tomorrow/Overdue from `due_date`, model reschedule scenarios as task outcomes, build the three role-specific dashboards (CS/Royale/Merchant) from the user's original spec (full scenario details in chat history: customer requesting Friday delivery, agent rescheduling to Tuesday).
+
+Start with Notifications UI next.
+
+---
+
+## 7. Working Conventions Established This Project
+
+- **Every SQL change is run by the user in Supabase manually** — Claude drafts it, explains it, user runs it and confirms success before app code is built against it.
+- **File handoff pattern:** Claude builds/edits files in its own sandbox, verifies with a brace/paren balance check (no live build tooling available in-session), then uses `present_files` so the user downloads and pastes into VS Code (Ctrl+A → paste → save for existing files; new file creation for new ones), then `git add . && git commit && git push` to deploy via Cloudflare.
+- **User is non-technical but capable** — comfortable with VS Code copy-paste workflow and Supabase SQL editor, not writing code themselves. Explanations should stay practical and step-by-step, not academic.
+- **This handoff doc must be regenerated/updated at the end of every major feature**, or proactively if a session is running long / approaching limits — per explicit standing instruction from the user.
