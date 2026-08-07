@@ -1,22 +1,17 @@
 import { supabase } from './supabase'
 
-/**
- * Finds the most specific active commission rule for a staff member.
- * Precedence: staff-specific override > role-based rule.
- * (Product-specific overrides are supported in the schema but not yet
- * surfaced in the Phase 2 UI — reserved for a later expansion.)
- */
 async function findApplicableRule(businessId, role, staffId) {
-  const { data: staffRule } = await supabase
+  const { data: staffRule, error: staffErr } = await supabase
     .from('commission_rules')
     .select('*')
     .eq('business_id', businessId)
     .eq('applies_to_user_id', staffId)
     .eq('is_active', true)
     .maybeSingle()
+  if (staffErr) console.error('Commission rule lookup error (staff-specific):', staffErr)
   if (staffRule) return staffRule
 
-  const { data: roleRule } = await supabase
+  const { data: roleRule, error: roleErr } = await supabase
     .from('commission_rules')
     .select('*')
     .eq('business_id', businessId)
@@ -24,6 +19,7 @@ async function findApplicableRule(businessId, role, staffId) {
     .is('applies_to_user_id', null)
     .eq('is_active', true)
     .maybeSingle()
+  if (roleErr) console.error('Commission rule lookup error (role-based):', roleErr)
   return roleRule || null
 }
 
@@ -44,15 +40,16 @@ function computeAmount(rule, order) {
 
 /**
  * Awards commission for a delivered order to a given staff member.
- * Silently does nothing if no active rule matches — a missing rule
- * should never block or fail the actual delivery workflow.
- * Idempotent: won't double-award if this order/staff pair already has a commission row.
+ * Every failure path now logs to console so issues are diagnosable —
+ * a previous version failed completely silently on insert errors.
  */
 export async function awardOrderCommission({ businessId, staffId, role, department, order }) {
-  if (!businessId || !staffId || !order?.id) return
+  if (!businessId || !staffId || !order?.id) {
+    console.warn('awardOrderCommission: missing required arg(s)', { businessId, staffId, orderId: order?.id })
+    return
+  }
 
-  // Avoid duplicate awards if delivery status gets touched more than once
-  const { data: existing } = await supabase
+  const { data: existing, error: existingErr } = await supabase
     .from('rewards')
     .select('id')
     .eq('business_id', businessId)
@@ -60,15 +57,29 @@ export async function awardOrderCommission({ businessId, staffId, role, departme
     .eq('related_order_id', order.id)
     .eq('reward_type', 'commission')
     .maybeSingle()
-  if (existing) return
+
+  if (existingErr) {
+    console.error('awardOrderCommission: error checking for existing reward:', existingErr)
+    return
+  }
+  if (existing) {
+    console.log('awardOrderCommission: reward already exists for this order+staff, skipping', { orderId: order.id, staffId })
+    return
+  }
 
   const rule = await findApplicableRule(businessId, role, staffId)
-  if (!rule) return
+  if (!rule) {
+    console.warn('awardOrderCommission: no active commission rule matched', { businessId, role, staffId })
+    return
+  }
 
   const amount = computeAmount(rule, order)
-  if (amount <= 0) return
+  if (amount <= 0) {
+    console.warn('awardOrderCommission: computed amount was 0 or less, skipping', { rule, order })
+    return
+  }
 
-  await supabase.from('rewards').insert({
+  const { error: insertErr } = await supabase.from('rewards').insert({
     business_id: businessId,
     staff_id: staffId,
     department,
@@ -81,17 +92,19 @@ export async function awardOrderCommission({ businessId, staffId, role, departme
     amount_paid: 0,
     status: 'earned',
   })
+
+  if (insertErr) {
+    console.error('awardOrderCommission: INSERT FAILED —', insertErr.message, insertErr)
+  } else {
+    console.log('awardOrderCommission: reward created successfully', { staffId, amount })
+  }
 }
 
-/**
- * Reverses a commission (e.g. order later refunded/returned).
- * Manual today; this is the exact call point Returns/Refunds will
- * trigger automatically once that feature exists — no redesign needed.
- */
 export async function reverseCommission(rewardId, reason) {
-  await supabase.from('rewards').update({
+  const { error } = await supabase.from('rewards').update({
     status: 'reversed',
     reversed_reason: reason,
     updated_at: new Date().toISOString(),
   }).eq('id', rewardId)
+  if (error) console.error('reverseCommission failed:', error)
 }
