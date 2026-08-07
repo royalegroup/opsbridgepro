@@ -116,11 +116,29 @@ Agreed with the user to build this *after* the commission core is stable and tes
 ## 5. Known Issues / Technical Debt
 
 - **RLS disabled everywhere.** Fine for current single-team usage; must be addressed before onboarding external/untrusted users or other merchants.
-- **No automated tests.** All verification has been manual (user testing in the live app) plus brace/paren syntax sanity checks during generation.
-- **Sandbox/session resets lose in-progress file state.** This is *why this document exists* — always check this file first in a new session before rebuilding anything, and check the live repo for what's actually deployed rather than assuming.
-- **`notifications` table exists but has no UI.** Either build it or remove it — currently dead schema.
+- **No automated tests.** All verification has been manual (user testing in the live app) plus brace/paren syntax sanity checks during generation. **This project's most serious bug so far (see "Resolved Bugs" below) passed every sandbox syntax check and only surfaced as a silent runtime failure** — a reminder that syntax-clean is not correctness-verified.
+- **Sandbox/session resets lose in-progress file state.** Always check this file first in a new session before rebuilding anything, and check the live repo for what's actually deployed rather than assuming.
 - Refunds/Returns has no data model — several features (Monthly Rollup, commission reversal) have honest placeholders waiting on this.
 - Cross-business analytics (Royale's agent workload/coverage visible from GlowMedals' State Insights) is explicitly deferred, not forgotten.
+
+### Resolved Bugs (kept for reference — don't rediscover these)
+
+**Commissions silently never awarded (found and fixed same day as Notifications UI).** Root cause was **three separate stale Postgres CHECK constraints** on the `rewards` table, left over from an earlier abandoned parallel design (the `commission_rates`/`commissionHelpers.js` version deleted earlier in this project — see Section 4's cleanup note). The table's constraints still only accepted the *old* design's values (`reward_type IN ('order_commission','campaign_incentive','bonus','referral','other')`, `calculation_method IN ('flat','percentage_of_order','percentage_of_profit','manual')`) while all the actually-built code (`rewardsHelpers.js`, `commission_rules`, both Rewards pages) used the *new* design's values (`'commission'`, `'percent_order'`, `'percent_profit'`). Every insert failed with Postgres error `23514` — but the original `awardOrderCommission()` never checked the insert's `error` return, so it failed **completely silently** with no console output, no thrown exception, nothing. The delivery/order flow itself worked perfectly throughout, which is exactly why this went undetected for a while.
+
+Fixed in two parts:
+1. `rewardsHelpers.js` rewritten so every Supabase call checks and logs its `error` — silent failures on a money-related action are no longer possible by design.
+2. The three constraints were dropped and recreated to match what the code actually writes:
+   ```sql
+   ALTER TABLE rewards DROP CONSTRAINT rewards_reward_type_check;
+   ALTER TABLE rewards ADD CONSTRAINT rewards_reward_type_check CHECK (reward_type IN ('commission', 'bonus', 'incentive'));
+   ALTER TABLE rewards DROP CONSTRAINT rewards_calculation_method_check;
+   ALTER TABLE rewards ADD CONSTRAINT rewards_calculation_method_check CHECK (calculation_method IN ('flat', 'percent_order', 'percent_profit'));
+   -- rewards_status_check already matched (pending/earned/approved/paid/reversed/cancelled) — no change needed
+   ```
+
+**Lesson for future sessions:** when a `rewards`-adjacent (or any pre-existing-table) feature misbehaves with no visible error, check `pg_constraint` for the actual live CHECK definitions before assuming the application code is wrong — a table can exist with a schema that silently diverges from what the code assumes, especially on a table that had more than one design attempt in this project's history.
+
+**Two `.single()` → `.maybeSingle()` bugs**, found via the same debugging session (console showed `406 Not Acceptable`): `codHelpers.js` (`createCODRecord`) and `stockHelpers.js` (`deductAgentStockOnDelivery`) both used `.single()` to check for an existing row where "no row found" is a normal, expected first-time case (no COD record yet, no agent_stock row yet for that product) — `.single()` treats zero rows as an error (406), `.maybeSingle()` correctly returns `null`. Both fixed. **General rule going forward:** use `.maybeSingle()` for any "does this already exist" existence-check query; reserve `.single()` for queries where exactly one row is a hard guarantee (e.g. fetching by primary key of a row you know exists).
 
 ---
 
@@ -139,14 +157,12 @@ Wired into the core lifecycle at: order created, order edited (internal), assign
 ### ✅ B2. Notifications UI — COMPLETE (core), partial trigger coverage
 Built `notificationHelpers.js` (`notify()` — fire-and-forget like `logEvent`; `getBusinessOwnerId()` — fallback recipient for business-level alerts with no specific staff target) and `NotificationBell.jsx` (unread-count badge, dropdown list, click-to-mark-read, mark-all-read), wired into `Sidebar.jsx` for both desktop and mobile. Notifications are inherently recipient-scoped (`recipient_id`) so no additional visibility-tier filtering was needed on top, unlike Order Timeline.
 
-**Trigger points wired this pass:** agent assigned a delivery → notifies the agent; order delivered → notifies the assigned CS Rep; delivery failed → notifies the assigned CS Rep; COD overdue alert sent (merchant → Royale) → notifies the Royale business owner. Wired into `RequestsPage.jsx`, `AgentView.jsx`, `FinancePage.jsx`.
+**Trigger points wired:** agent assigned a delivery → notifies the agent; order delivered → notifies the assigned CS Rep; delivery failed → notifies the assigned CS Rep; COD overdue alert sent, both directions (merchant → Royale owner, **and** Royale → agent) → notifies the right recipient; task escalated to a manager → notifies that manager. Wired into `RequestsPage.jsx`, `AgentView.jsx`, `FinancePage.jsx`, `CODPage.jsx` (Royale), and `taskHelpers.js`. **All originally-planned trigger points are now covered — notification coverage is complete for this phase.**
 
-**Deliberately not wired this pass (verify current file state before touching):** `taskHelpers.js` — task escalation should notify the manager it's escalated to; Royale's `CODPage.jsx` — the agent-side overdue alert (Royale → agent) should notify that agent, mirroring the merchant-side one that *was* wired. Both were skipped because this session's sandbox didn't have current state for those two files, and per `AI_RULES.md` (never regenerate a file you can't verify against the live version), guessing was judged riskier than leaving a documented gap. **Do these two next** — they're small, additive edits once the current file content is confirmed.
-
-### ⬜ B3. Tasks scheduling/reminder extension — after closing the two notification gaps above
+### ⬜ B3. Tasks scheduling/reminder extension — next
 Add reminder-timing fields, derive Upcoming/Due Today/Due Tomorrow/Overdue from `due_date`, model reschedule scenarios as task outcomes, build the three role-specific dashboards (CS/Royale/Merchant) from the user's original spec (full scenario details in chat history: customer requesting Friday delivery, agent rescheduling to Tuesday).
 
-Next: close the `taskHelpers.js` escalation-notification and Royale `CODPage.jsx` agent-alert-notification gaps, then move to B3.
+Start with B3 next.
 
 ---
 
