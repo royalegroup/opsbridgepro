@@ -1,4 +1,5 @@
 import { supabase } from './supabase'
+import { notify } from './notificationHelpers'
 
 export const TASK_OUTCOMES = {
   follow_up_delivered: [
@@ -68,9 +69,7 @@ export async function completeTaskWithOutcome({ taskId, outcome, outcomeNotes, n
     completed_at: new Date().toISOString(),
   }
 
-  // Handle special outcomes
   if (outcome === 'escalate_to_manager') {
-    // Find manager in the business
     const { data: manager } = await supabase
       .from('users')
       .select('id')
@@ -84,9 +83,20 @@ export async function completeTaskWithOutcome({ taskId, outcome, outcomeNotes, n
     updates.escalation_reason = outcomeNotes
     delete updates.completed_at
     delete updates.completed_by
+
+    if (manager?.id) {
+      await notify({
+        recipientId: manager.id,
+        businessId: profile.business_id,
+        type: 'task_escalated',
+        title: 'Task escalated to you',
+        message: `"${task.title}" was escalated by ${profile.full_name}${outcomeNotes ? `: ${outcomeNotes}` : ''}`,
+        referenceId: taskId,
+        referenceType: 'task',
+      })
+    }
   } else if (outcome === 'needs_another_follow_up') {
     updates.status = 'completed'
-    // Create new follow-up task
     const followUpDate = new Date()
     followUpDate.setDate(followUpDate.getDate() + 2)
     await supabase.from('tasks').insert({
@@ -102,7 +112,6 @@ export async function completeTaskWithOutcome({ taskId, outcome, outcomeNotes, n
     })
   } else if (outcome === 'customer_ready_to_reorder' || outcome === 'interested_in_another_product') {
     updates.status = 'completed'
-    // Reorder will be handled in the UI
   } else {
     updates.status = 'completed'
   }
