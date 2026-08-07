@@ -7,7 +7,6 @@ import { supabase } from './supabase'
 export async function deductAgentStockOnDelivery(orderId, agentId) {
   if (!orderId || !agentId) return
 
-  // Get all items in this order
   const { data: items, error } = await supabase
     .from('order_items')
     .select('product_id, quantity')
@@ -18,14 +17,17 @@ export async function deductAgentStockOnDelivery(orderId, agentId) {
     return
   }
 
-  // Deduct each product from agent stock
   for (const item of items) {
-    const { data: stockRow } = await supabase
+    // maybeSingle() — an agent may not have a stock row for this product yet,
+    // which is a normal case (not an error), so treat "not found" as null
+    const { data: stockRow, error: stockErr } = await supabase
       .from('agent_stock')
       .select('id, quantity')
       .eq('agent_id', agentId)
       .eq('product_id', item.product_id)
-      .single()
+      .maybeSingle()
+
+    if (stockErr) { console.error('deductAgentStockOnDelivery: lookup error', stockErr); continue }
 
     if (stockRow) {
       const newQty = Math.max(0, stockRow.quantity - item.quantity)
@@ -35,6 +37,8 @@ export async function deductAgentStockOnDelivery(orderId, agentId) {
         .eq('id', stockRow.id)
 
       console.log(`Stock deducted: product ${item.product_id}, agent ${agentId}, qty -${item.quantity}, new qty: ${newQty}`)
+    } else {
+      console.warn(`No agent_stock row for agent ${agentId}, product ${item.product_id} — nothing to deduct`)
     }
   }
 }
