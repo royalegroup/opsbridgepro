@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../contexts/AuthContext'
-import { TASK_OUTCOMES, completeTaskWithOutcome } from '../../lib/taskHelpers'
+import { TASK_OUTCOMES, completeTaskWithOutcome, RESCHEDULE_OUTCOMES, deriveTaskStatus, FOLLOW_UP_STATUS_LABELS, FOLLOW_UP_STATUS_STYLES } from '../../lib/taskHelpers'
 
 const PRIORITY_STYLES = {
   high: 'bg-red-50 text-red-700 border-red-200',
@@ -21,6 +21,9 @@ const TYPE_LABELS = {
 }
 const FILTERS = [
   { key: 'pending', label: 'Pending' },
+  { key: 'due_today', label: 'Due Today' },
+  { key: 'due_tomorrow', label: 'Due Tomorrow' },
+  { key: 'overdue', label: 'Overdue' },
   { key: 'in_progress', label: 'In Progress' },
   { key: 'escalated', label: 'Escalated' },
   { key: 'completed', label: 'Completed' },
@@ -35,7 +38,7 @@ export default function TasksPage() {
   const [showForm, setShowForm] = useState(false)
   const [outcomeModal, setOutcomeModal] = useState(null)
   const [reorderModal, setReorderModal] = useState(null)
-  const [outcomeForm, setOutcomeForm] = useState({ outcome: '', notes: '', nextAction: '' })
+  const [outcomeForm, setOutcomeForm] = useState({ outcome: '', notes: '', nextAction: '', rescheduleDate: '' })
   const [manualForm, setManualForm] = useState({ title: '', notes: '', assigned_to: '', priority: 'normal', due_date: '' })
   const [saving, setSaving] = useState(false)
   const [loading, setLoading] = useState(true)
@@ -69,12 +72,13 @@ export default function TasksPage() {
     await completeTaskWithOutcome({
       taskId: outcomeModal.id, outcome: outcomeForm.outcome, outcomeNotes: outcomeForm.notes,
       nextAction: outcomeForm.nextAction, completedBy: profile.id, task: outcomeModal, profile,
+      rescheduleDate: outcomeForm.rescheduleDate || null,
     })
     if (outcomeForm.outcome === 'customer_ready_to_reorder' || outcomeForm.outcome === 'interested_in_another_product') {
       setReorderModal(outcomeModal)
     }
     setOutcomeModal(null)
-    setOutcomeForm({ outcome: '', notes: '', nextAction: '' })
+    setOutcomeForm({ outcome: '', notes: '', nextAction: '', rescheduleDate: '' })
     load()
     setSaving(false)
   }
@@ -133,16 +137,18 @@ export default function TasksPage() {
     setSaving(false)
   }
 
-  const isOverdue = t => !t.due_date || t.status === 'completed' ? false : new Date(t.due_date) < new Date()
   const isEscalated = t => !!t.escalated_at && t.status !== 'completed'
 
   const filtered = tasks.filter(t => {
     if (filter === 'escalated') return isEscalated(t)
     if (filter === 'all') return true
+    if (['due_today', 'due_tomorrow', 'overdue'].includes(filter)) return deriveTaskStatus(t) === filter
     return t.status === filter
   })
 
-  const overdueCount = tasks.filter(t => isOverdue(t)).length
+  const dueTodayCount = tasks.filter(t => deriveTaskStatus(t) === 'due_today').length
+  const dueTomorrowCount = tasks.filter(t => deriveTaskStatus(t) === 'due_tomorrow').length
+  const overdueCount = tasks.filter(t => deriveTaskStatus(t) === 'overdue').length
   const escalatedCount = tasks.filter(t => isEscalated(t)).length
 
   return (
@@ -161,10 +167,10 @@ export default function TasksPage() {
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         {[
-          { label: 'Pending', count: tasks.filter(t => t.status === 'pending').length, color: 'text-amber-600' },
-          { label: 'In Progress', count: tasks.filter(t => t.status === 'in_progress').length, color: 'text-blue-600' },
-          { label: 'Escalated', count: escalatedCount, color: 'text-orange-500' },
+          { label: 'Due Today', count: dueTodayCount, color: 'text-amber-600' },
+          { label: 'Due Tomorrow', count: dueTomorrowCount, color: 'text-blue-600' },
           { label: 'Overdue', count: overdueCount, color: 'text-red-600' },
+          { label: 'Escalated', count: escalatedCount, color: 'text-orange-500' },
         ].map(s => (
           <div key={s.label} className="card text-center py-4">
             <p className={`text-2xl font-bold ${s.color}`}>{s.count}</p>
@@ -174,13 +180,22 @@ export default function TasksPage() {
       </div>
 
       <div className="flex gap-2 overflow-x-auto pb-1">
-        {FILTERS.map(f => (
-          <button key={f.key} onClick={() => setFilter(f.key)}
-            className={`px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-colors ${filter === f.key ? 'bg-brand-600 text-white' : 'bg-white border border-surface-200 text-ink-500 hover:bg-surface-50'}`}>
-            {f.label}
-            <span className="ml-1.5 opacity-70">{f.key === 'all' ? tasks.length : f.key === 'escalated' ? escalatedCount : tasks.filter(t => t.status === f.key).length}</span>
-          </button>
-        ))}
+        {FILTERS.map(f => {
+          let count = tasks.length
+          if (f.key === 'all') count = tasks.length
+          else if (f.key === 'escalated') count = escalatedCount
+          else if (f.key === 'due_today') count = dueTodayCount
+          else if (f.key === 'due_tomorrow') count = dueTomorrowCount
+          else if (f.key === 'overdue') count = overdueCount
+          else count = tasks.filter(t => t.status === f.key).length
+          return (
+            <button key={f.key} onClick={() => setFilter(f.key)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-colors ${filter === f.key ? 'bg-brand-600 text-white' : 'bg-white border border-surface-200 text-ink-500 hover:bg-surface-50'}`}>
+              {f.label}
+              <span className="ml-1.5 opacity-70">{count}</span>
+            </button>
+          )
+        })}
       </div>
 
       <div className="space-y-3">
@@ -192,15 +207,19 @@ export default function TasksPage() {
             <p className="text-ink-500 font-medium">No {filter === 'all' ? '' : filter} tasks</p>
             <p className="text-sm text-ink-400 mt-1">Tasks are auto-created when orders are delivered or failed.</p>
           </div>
-        ) : filtered.map(task => (
-          <div key={task.id} className={`card border ${isEscalated(task) ? 'border-orange-200 bg-orange-50/20' : isOverdue(task) ? 'border-red-200 bg-red-50/20' : 'border-surface-200'}`}>
+        ) : filtered.map(task => {
+          const followUpStatus = deriveTaskStatus(task)
+          return (
+          <div key={task.id} className={`card border ${isEscalated(task) ? 'border-orange-200 bg-orange-50/20' : followUpStatus === 'overdue' ? 'border-red-200 bg-red-50/20' : 'border-surface-200'}`}>
             <div className="flex items-start justify-between gap-3">
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 flex-wrap mb-1">
                   <span className="text-xs text-ink-400">{TYPE_LABELS[task.type]}</span>
                   <span className={`badge border text-xs ${PRIORITY_STYLES[task.priority]}`}>{task.priority}</span>
                   {isEscalated(task) && <span className="badge bg-orange-100 text-orange-700">Escalated</span>}
-                  {isOverdue(task) && <span className="badge bg-red-100 text-red-700">Overdue</span>}
+                  {['overdue', 'due_today', 'due_tomorrow'].includes(followUpStatus) && (
+                    <span className={`badge ${FOLLOW_UP_STATUS_STYLES[followUpStatus]}`}>{FOLLOW_UP_STATUS_LABELS[followUpStatus]}</span>
+                  )}
                 </div>
                 <p className="font-semibold text-ink-900 text-sm">{task.title}</p>
                 {task.notes && <p className="text-xs text-ink-500 mt-1">{task.notes}</p>}
@@ -232,7 +251,7 @@ export default function TasksPage() {
                 )}
                 <div className="flex items-center gap-3 mt-2 flex-wrap">
                   {task.due_date && (
-                    <p className={`text-xs ${isOverdue(task) ? 'text-danger font-medium' : 'text-ink-400'}`}>Due: {new Date(task.due_date).toLocaleDateString('en-NG')}</p>
+                    <p className={`text-xs ${followUpStatus === 'overdue' ? 'text-danger font-medium' : 'text-ink-400'}`}>Due: {new Date(task.due_date).toLocaleDateString('en-NG')}</p>
                   )}
                   <p className="text-xs text-ink-400">Assigned: <span className="font-medium text-ink-600">{task.users?.full_name || 'Unassigned'}</span></p>
                 </div>
@@ -242,7 +261,7 @@ export default function TasksPage() {
 
             {task.status !== 'completed' && task.status !== 'cancelled' && (
               <div className="flex gap-2 mt-4 flex-wrap items-center border-t border-surface-100 pt-3">
-                <button onClick={() => { setOutcomeModal(task); setOutcomeForm({ outcome: '', notes: '', nextAction: '' }) }}
+                <button onClick={() => { setOutcomeModal(task); setOutcomeForm({ outcome: '', notes: '', nextAction: '', rescheduleDate: '' }) }}
                   className="text-xs px-3 py-1.5 rounded-lg bg-brand-50 text-brand-700 font-medium hover:bg-brand-100">Log Outcome</button>
                 {task.status === 'pending' && (
                   <button onClick={() => updateTaskStatus(task.id, 'in_progress')} className="text-xs px-3 py-1.5 rounded-lg bg-blue-50 text-blue-700 font-medium hover:bg-blue-100">Start</button>
@@ -258,7 +277,8 @@ export default function TasksPage() {
               </div>
             )}
           </div>
-        ))}
+          )
+        })}
       </div>
 
       {outcomeModal && (
@@ -284,6 +304,14 @@ export default function TasksPage() {
                   ))}
                 </div>
               </div>
+              {RESCHEDULE_OUTCOMES.includes(outcomeForm.outcome) && (
+                <div className="bg-brand-50 border border-brand-100 rounded-xl p-3">
+                  <label className="label">New Follow-Up Date <span className="text-ink-400 font-normal normal-case">(the date the customer actually asked for)</span></label>
+                  <input type="date" className="input" min={new Date().toISOString().split('T')[0]}
+                    value={outcomeForm.rescheduleDate} onChange={e => setOutcomeForm(f => ({ ...f, rescheduleDate: e.target.value }))} />
+                  <p className="text-xs text-ink-400 mt-1">Leave blank to default to 2 days from now.</p>
+                </div>
+              )}
               <div>
                 <label className="label">Notes <span className="text-ink-300 font-normal normal-case">(required)</span></label>
                 <textarea className="input" rows={3} value={outcomeForm.notes} onChange={e => setOutcomeForm(f => ({ ...f, notes: e.target.value }))} placeholder="What happened during this follow-up? Be specific…" />

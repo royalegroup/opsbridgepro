@@ -28,6 +28,7 @@ const LOGISTICS_NAV = [
   { label: 'COD', icon: '◆', page: 'cod' },
   { label: 'Merchants', icon: '▦', page: 'merchants' },
   { label: 'Rewards', icon: '🏆', page: 'royale_rewards' },
+  { label: 'Follow-ups', icon: '📅', page: 'royale_tasks' },
   { label: 'Staff', icon: '◧', page: 'royale_staff' },
   { label: 'Reports', icon: '◧', page: 'reports' },
 ]

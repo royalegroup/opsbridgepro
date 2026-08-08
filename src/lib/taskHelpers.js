@@ -24,6 +24,49 @@ export const TASK_OUTCOMES = {
   ],
 }
 
+// Outcomes that involve picking a specific future date, rather than a fixed +2 days
+export const RESCHEDULE_OUTCOMES = ['needs_another_follow_up', 're_delivery_scheduled']
+
+/**
+ * Derives a task's live follow-up status from due_date + status, rather than
+ * storing a redundant field that could drift. Same principle as Order Timeline
+ * not storing a separate "visibility" computed state.
+ */
+export function deriveTaskStatus(task) {
+  if (task.status === 'completed') return 'completed'
+  if (task.status === 'cancelled') return 'cancelled'
+  if (!task.due_date) return 'upcoming'
+
+  const due = new Date(task.due_date)
+  const now = new Date()
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  const startOfTomorrow = new Date(startOfToday); startOfTomorrow.setDate(startOfTomorrow.getDate() + 1)
+  const startOfDayAfter = new Date(startOfTomorrow); startOfDayAfter.setDate(startOfDayAfter.getDate() + 1)
+
+  if (due < startOfToday) return 'overdue'
+  if (due < startOfTomorrow) return 'due_today'
+  if (due < startOfDayAfter) return 'due_tomorrow'
+  return 'upcoming'
+}
+
+export const FOLLOW_UP_STATUS_LABELS = {
+  overdue: 'Overdue',
+  due_today: 'Due Today',
+  due_tomorrow: 'Due Tomorrow',
+  upcoming: 'Upcoming',
+  completed: 'Completed',
+  cancelled: 'Cancelled',
+}
+
+export const FOLLOW_UP_STATUS_STYLES = {
+  overdue: 'bg-red-50 text-red-700',
+  due_today: 'bg-amber-50 text-amber-700',
+  due_tomorrow: 'bg-blue-50 text-blue-700',
+  upcoming: 'bg-gray-50 text-gray-500',
+  completed: 'bg-green-50 text-green-700',
+  cancelled: 'bg-gray-100 text-gray-400',
+}
+
 export async function createFollowUpTask(order, status, merchantId) {
   if (!order || !merchantId) return
 
@@ -55,12 +98,40 @@ export async function createFollowUpTask(order, status, merchantId) {
     status: 'pending',
     priority: isFailed ? 'high' : 'normal',
     due_date: dueDate.toISOString(),
+    origin: isFailed ? 'delivery_failure' : 'workflow',
+    next_action_type: isDelivered ? 'Call Customer' : 'Attempt Redelivery',
+    reminder_offset_hours: 24,
   })
 
   if (error) console.error('Task creation error:', error)
 }
 
-export async function completeTaskWithOutcome({ taskId, outcome, outcomeNotes, nextAction, completedBy, task, profile }) {
+/**
+ * Creates a task on the logistics (Royale) side — e.g. when a customer
+ * requests a delivery reschedule during an attempt. Mirrors createFollowUpTask's
+ * shape but scoped by logistics_id instead of merchant_id.
+ */
+export async function createLogisticsTask({ logisticsId, orderId, assignedTo, title, notes, dueDate, priority = 'normal', nextActionType, origin = 'customer_reschedule', createdBy }) {
+  if (!logisticsId || !title) return
+  const { error } = await supabase.from('tasks').insert({
+    logistics_id: logisticsId,
+    order_id: orderId || null,
+    assigned_to: assignedTo || null,
+    created_by: createdBy || null,
+    type: 'manual',
+    title,
+    notes: notes || null,
+    status: 'pending',
+    priority,
+    due_date: dueDate,
+    origin,
+    next_action_type: nextActionType || null,
+    reminder_offset_hours: 24,
+  })
+  if (error) console.error('Logistics task creation error:', error)
+}
+
+export async function completeTaskWithOutcome({ taskId, outcome, outcomeNotes, nextAction, completedBy, task, profile, rescheduleDate }) {
   const updates = {
     outcome,
     outcome_notes: outcomeNotes,
@@ -95,20 +166,26 @@ export async function completeTaskWithOutcome({ taskId, outcome, outcomeNotes, n
         referenceType: 'task',
       })
     }
-  } else if (outcome === 'needs_another_follow_up') {
+  } else if (RESCHEDULE_OUTCOMES.includes(outcome)) {
     updates.status = 'completed'
-    const followUpDate = new Date()
-    followUpDate.setDate(followUpDate.getDate() + 2)
+    // Use the explicit date the user picked; fall back to +2 days only if none given
+    const followUpDate = rescheduleDate ? new Date(rescheduleDate) : new Date()
+    if (!rescheduleDate) followUpDate.setDate(followUpDate.getDate() + 2)
+
     await supabase.from('tasks').insert({
-      merchant_id: task.merchant_id,
+      merchant_id: task.merchant_id || null,
+      logistics_id: task.logistics_id || null,
       order_id: task.order_id,
       assigned_to: task.assigned_to,
       type: task.type,
       title: `Follow-Up: ${task.title}`,
-      notes: `Previous follow-up outcome: ${outcomeNotes || 'No notes'}`,
+      notes: `Previous outcome: ${outcomeNotes || 'No notes'}`,
       status: 'pending',
       priority: task.priority,
       due_date: followUpDate.toISOString(),
+      origin: 'customer_reschedule',
+      next_action_type: outcome === 're_delivery_scheduled' ? 'Attempt Redelivery' : 'Call Customer',
+      reminder_offset_hours: 24,
     })
   } else if (outcome === 'customer_ready_to_reorder' || outcome === 'interested_in_another_product') {
     updates.status = 'completed'

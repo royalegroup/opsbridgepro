@@ -30,6 +30,7 @@ import MerchantsPage from './pages/logistics/MerchantsPage'
 import LogisticsReportsPage from './pages/logistics/LogisticsReportsPage'
 import RoyaleStaffPage from './pages/logistics/RoyaleStaffPage'
 import RoyaleRewardsPage from './pages/logistics/RoyaleRewardsPage'
+import RoyaleTasksPage from './pages/logistics/RoyaleTasksPage'
 
 // Agent view
 import AgentView from './pages/agent/AgentView'
@@ -61,6 +62,7 @@ const LOGISTICS_PAGES = {
   merchants: MerchantsPage,
   royale_staff: RoyaleStaffPage,
   royale_rewards: RoyaleRewardsPage,
+  royale_tasks: RoyaleTasksPage,
   reports: LogisticsReportsPage,
 }
 
