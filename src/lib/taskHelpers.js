@@ -107,6 +107,32 @@ export async function createFollowUpTask(order, status, merchantId) {
 }
 
 /**
+ * Creates a task on the merchant (GlowMedals) side — e.g. when a CS Rep
+ * confirms with the customer that they want a delivery/callback on a specific
+ * future date, before the order is even sent to logistics. Mirrors
+ * createLogisticsTask's shape but scoped by merchant_id instead of logistics_id.
+ */
+export async function createMerchantTask({ merchantId, orderId, assignedTo, title, notes, dueDate, priority = 'normal', nextActionType, origin = 'customer_reschedule', createdBy }) {
+  if (!merchantId || !title) return
+  const { error } = await supabase.from('tasks').insert({
+    merchant_id: merchantId,
+    order_id: orderId || null,
+    assigned_to: assignedTo || null,
+    created_by: createdBy || null,
+    type: 'manual',
+    title,
+    notes: notes || null,
+    status: 'pending',
+    priority,
+    due_date: dueDate,
+    origin,
+    next_action_type: nextActionType || null,
+    reminder_offset_hours: 24,
+  })
+  if (error) console.error('Merchant task creation error:', error)
+}
+
+/**
  * Creates a task on the logistics (Royale) side — e.g. when a customer
  * requests a delivery reschedule during an attempt. Mirrors createFollowUpTask's
  * shape but scoped by logistics_id instead of merchant_id.

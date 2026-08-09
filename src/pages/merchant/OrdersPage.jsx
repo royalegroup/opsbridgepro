@@ -2,10 +2,11 @@ import { useEffect, useState } from 'react'
 import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../contexts/AuthContext'
 import Badge from '../../components/shared/Badge'
-import { createFollowUpTask } from '../../lib/taskHelpers'
+import { createFollowUpTask, createMerchantTask } from '../../lib/taskHelpers'
 import ReceiptModal from '../../components/merchant/ReceiptModal'
 import { exportOrdersToCSV } from '../../lib/csvExport'
 import { logEvent } from '../../lib/orderEventHelpers'
+import { notify } from '../../lib/notificationHelpers'
 import OrderTimeline from '../../components/shared/OrderTimeline'
 
 const STATUSES = ['all', 'new', 'assigned', 'confirmed', 'sent_to_logistics', 'in_transit', 'delivered', 'failed', 'cancelled']
@@ -33,6 +34,9 @@ export default function OrdersPage() {
   const [exportOpen, setExportOpen] = useState(false)
   const [blockWarning, setBlockWarning] = useState(null)
   const [overrideBlock, setOverrideBlock] = useState(false)
+  const [rescheduleModal, setRescheduleModal] = useState(null)
+  const [rescheduleForm, setRescheduleForm] = useState({ date: '', notes: '' })
+  const [rescheduleSaving, setRescheduleSaving] = useState(false)
 
   const isScoped = profile?.scope_own_records === true && profile?.role !== 'owner'
   // Only owners and non-scoped staff can create brand-new orders/customers.
@@ -229,6 +233,52 @@ export default function OrdersPage() {
     loadAll()
   }
 
+  async function submitReschedule() {
+    if (!rescheduleModal || !rescheduleForm.date) return
+    setRescheduleSaving(true)
+
+    const customerName = rescheduleModal.customers?.full_name || 'customer'
+    const targetStaff = rescheduleModal.assigned_cs_rep || (isScoped ? profile.id : null)
+
+    await createMerchantTask({
+      merchantId: profile.business_id,
+      orderId: rescheduleModal.id,
+      assignedTo: targetStaff,
+      title: `Call ${customerName} — confirm on rescheduled date`,
+      notes: rescheduleForm.notes,
+      dueDate: new Date(rescheduleForm.date).toISOString(),
+      priority: 'normal',
+      nextActionType: 'Call Customer',
+      origin: 'customer_reschedule',
+      createdBy: profile.id,
+    })
+
+    await logEvent({
+      orderId: rescheduleModal.id,
+      eventType: 'order_confirmed',
+      description: `Customer asked to be contacted again on ${new Date(rescheduleForm.date).toLocaleDateString('en-NG')} — order held, not yet sent to logistics`,
+      actorId: profile.id,
+      visibilityLevel: 'public',
+    })
+
+    if (targetStaff && targetStaff !== profile.id) {
+      await notify({
+        recipientId: targetStaff,
+        businessId: profile.business_id,
+        type: 'delivery_update',
+        title: 'Order rescheduled',
+        message: `${customerName} asked to be contacted again on ${new Date(rescheduleForm.date).toLocaleDateString('en-NG')}.`,
+        referenceId: rescheduleModal.id,
+        referenceType: 'order',
+      })
+    }
+
+    setRescheduleModal(null)
+    setRescheduleForm({ date: '', notes: '' })
+    setRescheduleSaving(false)
+    loadAll()
+  }
+
   async function assignRep(orderId, repId) {
     await supabase.from('orders').update({ assigned_cs_rep: repId, status: 'assigned' }).eq('id', orderId)
     const rep = csReps.find(r => r.id === repId)
@@ -334,6 +384,10 @@ export default function OrdersPage() {
                         className="text-xs px-3 py-1.5 rounded-lg bg-green-50 text-green-700 font-medium hover:bg-green-100 transition-colors">
                         Mark Confirmed →
                       </button>
+                      <button onClick={() => { setRescheduleModal(order); setRescheduleForm({ date: '', notes: '' }) }}
+                        className="text-xs px-3 py-1.5 rounded-lg bg-amber-50 text-amber-700 font-medium hover:bg-amber-100 transition-colors">
+                        📅 Reschedule
+                      </button>
                       <button onClick={() => updateStatus(order.id, 'cancelled')}
                         className="text-xs px-3 py-1.5 rounded-lg bg-red-50 text-red-600 font-medium hover:bg-red-100 transition-colors">
                         Cancel
@@ -373,6 +427,35 @@ export default function OrdersPage() {
 
       {timelineOrderId && (
         <OrderTimeline orderId={timelineOrderId} onClose={() => setTimelineOrderId(null)} />
+      )}
+
+      {rescheduleModal && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center p-4">
+          <div className="bg-white rounded-2xl w-full max-w-sm shadow-panel p-5 space-y-4">
+            <h3 className="font-semibold text-ink-900">Reschedule Follow-Up</h3>
+            <div className="bg-amber-50 rounded-xl p-3">
+              <p className="text-sm font-medium text-amber-800">{rescheduleModal.customers?.full_name}</p>
+              <p className="text-xs text-amber-600 mt-0.5">Order stays as-is — it will not be sent to logistics until you confirm it.</p>
+            </div>
+            <div>
+              <label className="label">Call/Deliver On</label>
+              <input type="date" className="input" min={new Date().toISOString().split('T')[0]}
+                value={rescheduleForm.date} onChange={e => setRescheduleForm(f => ({ ...f, date: e.target.value }))} />
+            </div>
+            <div>
+              <label className="label">Notes <span className="text-ink-300 font-normal normal-case">(optional)</span></label>
+              <textarea className="input" rows={2} value={rescheduleForm.notes}
+                onChange={e => setRescheduleForm(f => ({ ...f, notes: e.target.value }))} placeholder="e.g. Customer travelling, back Friday" />
+            </div>
+            <p className="text-xs text-ink-400">This creates a follow-up task for the assigned rep and records it on the order timeline.</p>
+            <div className="flex gap-3">
+              <button onClick={() => setRescheduleModal(null)} className="btn-secondary flex-1">Cancel</button>
+              <button onClick={submitReschedule} disabled={rescheduleSaving || !rescheduleForm.date} className="btn-primary flex-1">
+                {rescheduleSaving ? 'Saving…' : 'Save Reschedule'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* New/Edit Order Modal */}
