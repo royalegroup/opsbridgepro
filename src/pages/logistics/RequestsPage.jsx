@@ -169,7 +169,7 @@ export default function RequestsPage() {
     await createLogisticsTask({
       logisticsId: profile.business_id,
       orderId,
-      assignedTo: rescheduleModal.assigned_agent,
+      assignedTo: rescheduleModal.agents?.user_id,
       title: `Redeliver to ${rescheduleModal.orders?.customers?.full_name || 'customer'}`,
       notes: rescheduleForm.notes,
       dueDate: new Date(rescheduleForm.date).toISOString(),
