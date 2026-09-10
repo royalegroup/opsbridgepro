@@ -49,7 +49,7 @@ export default function OrdersPage() {
 
   async function loadAll() {
     const bid = profile.business_id
-    let orderQuery = supabase.from('orders').select('*, customers(full_name, phone), users(full_name)').eq('merchant_id', bid).order('created_at', { ascending: false })
+    let orderQuery = supabase.from('orders').select('*, customers(full_name, phone), users!orders_assigned_cs_rep_fkey(full_name)').eq('merchant_id', bid).order('created_at', { ascending: false })
     if (isScoped) orderQuery = orderQuery.eq('assigned_cs_rep', profile.id)
 
     let customerQuery = supabase.from('customers').select('id, full_name, phone').eq('merchant_id', bid)
