@@ -52,7 +52,7 @@ export default function TasksPage() {
   async function load() {
     const bid = profile.business_id
     let taskQuery = supabase.from('tasks')
-      .select('*, users!tasks_assigned_to_fkey(full_name), completed_user:users!tasks_completed_by_fkey(full_name), orders(id, delivery_state, customers(full_name, phone), order_items(product_id, quantity, products(name)))')
+      .select('*, users!tasks_assigned_to_fkey(full_name), completed_user:users!tasks_completed_by_fkey(full_name), orders!tasks_order_id_fkey(id, delivery_state, customers(full_name, phone), order_items(product_id, quantity, products(name)))')
       .eq('merchant_id', bid)
       .order('due_date', { ascending: true, nullsFirst: false })
     if (isScoped) taskQuery = taskQuery.eq('assigned_to', profile.id)
