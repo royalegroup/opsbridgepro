@@ -113,8 +113,8 @@ export async function createFollowUpTask(order, status, merchantId) {
  * createLogisticsTask's shape but scoped by merchant_id instead of logistics_id.
  */
 export async function createMerchantTask({ merchantId, orderId, assignedTo, title, notes, dueDate, priority = 'normal', nextActionType, origin = 'customer_reschedule', createdBy }) {
-  if (!merchantId || !title) return
-  const { error } = await supabase.from('tasks').insert({
+  if (!merchantId || !title) return null
+  const { data, error } = await supabase.from('tasks').insert({
     merchant_id: merchantId,
     order_id: orderId || null,
     assigned_to: assignedTo || null,
@@ -128,8 +128,9 @@ export async function createMerchantTask({ merchantId, orderId, assignedTo, titl
     origin,
     next_action_type: nextActionType || null,
     reminder_offset_hours: 24,
-  })
-  if (error) console.error('Merchant task creation error:', error)
+  }).select().single()
+  if (error) { console.error('Merchant task creation error:', error); return null }
+  return data
 }
 
 /**
@@ -138,8 +139,8 @@ export async function createMerchantTask({ merchantId, orderId, assignedTo, titl
  * shape but scoped by logistics_id instead of merchant_id.
  */
 export async function createLogisticsTask({ logisticsId, orderId, assignedTo, title, notes, dueDate, priority = 'normal', nextActionType, origin = 'customer_reschedule', createdBy }) {
-  if (!logisticsId || !title) return
-  const { error } = await supabase.from('tasks').insert({
+  if (!logisticsId || !title) return null
+  const { data, error } = await supabase.from('tasks').insert({
     logistics_id: logisticsId,
     order_id: orderId || null,
     assigned_to: assignedTo || null,
@@ -153,8 +154,9 @@ export async function createLogisticsTask({ logisticsId, orderId, assignedTo, ti
     origin,
     next_action_type: nextActionType || null,
     reminder_offset_hours: 24,
-  })
-  if (error) console.error('Logistics task creation error:', error)
+  }).select().single()
+  if (error) { console.error('Logistics task creation error:', error); return null }
+  return data
 }
 
 export async function completeTaskWithOutcome({ taskId, outcome, outcomeNotes, nextAction, completedBy, task, profile, rescheduleDate }) {
@@ -223,17 +225,25 @@ export async function completeTaskWithOutcome({ taskId, outcome, outcomeNotes, n
 }
 
 /**
- * Quick reschedule for tasks that don't go through the full outcome-picker flow
- * (e.g. Royale's simpler Tasks dashboard, which doesn't use TASK_OUTCOMES per
- * type). Deliberately mirrors the RESCHEDULE_OUTCOMES branch of
- * completeTaskWithOutcome above — same two-step pattern (complete the current
- * task, spawn a new one at the new date) so both sides leave an identical
- * audit trail rather than two different reschedule behaviors existing in the
- * same app. Stores outcome 'needs_another_follow_up' on the closed task so it
- * reads consistently in history even though no outcome-picker was shown.
+ * ⚠️ NARROWED SCOPE (architectural fix): this used to also handle order-linked
+ * tasks (e.g. Royale's Follow-ups page). That use is now RETIRED in favor of
+ * schedulingHelpers.js's scheduleFollowUp(), which adds the order-level
+ * next_follow_up_* pointer, existing-schedule detection, and a concurrency
+ * check that this function never had. Do not reintroduce a call to this
+ * function for any task that has an order_id.
+ *
+ * What remains legitimate: rescheduling a standalone task with NO order_id
+ * (e.g. an internal admin reminder not tied to any customer order) — there is
+ * no order to hold a "current schedule" pointer for, so the simpler
+ * close-and-spawn pattern here is sufficient and there is nothing to
+ * consolidate it with.
  */
 export async function rescheduleTask({ task, newDate, rescheduledBy, reason }) {
   if (!task || !newDate) return
+  if (task.order_id) {
+    console.error('rescheduleTask() called on an order-linked task — use scheduleFollowUp() from schedulingHelpers.js instead.')
+    return
+  }
 
   await supabase.from('tasks').update({
     status: 'completed',
@@ -246,7 +256,7 @@ export async function rescheduleTask({ task, newDate, rescheduledBy, reason }) {
   const { error } = await supabase.from('tasks').insert({
     merchant_id: task.merchant_id || null,
     logistics_id: task.logistics_id || null,
-    order_id: task.order_id,
+    order_id: null,
     assigned_to: task.assigned_to,
     type: task.type,
     title: `Follow-Up: ${task.title}`,

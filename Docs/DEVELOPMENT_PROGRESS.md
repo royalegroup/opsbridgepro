@@ -1,6 +1,6 @@
 # OpsBridge Pro — Development Progress & Handoff
 
-**Last updated:** After completing the Rewards & Commissions engine (Phase 2)
+**Last updated:** After implementing the B3 architectural fix (shared `scheduleFollowUp()` across all 4 known surfaces) — awaiting deploy + retest, plus a newly found 5th surface flagged for decision. See Section 6, B3.
 **Purpose:** Any Claude session (or developer) should be able to read this file and resume work immediately without re-analyzing the codebase or re-asking the user for context already established.
 
 ---
@@ -50,7 +50,7 @@ GlowMedals (merchant) side:
 - `campaigns` — marketing campaigns, optionally linked to a product and/or order source for ROAS attribution
 - `blocked_customers` — fraud/COD-rejection blocklist, checked by phone at order creation
 - `merchant_stock`, `merchant_stock_receipts` — GlowMedals' own on-hand inventory (separate from Royale's side), with dispatch validated against and deducted from this balance
-- `tasks` (+ `outcome`, `outcome_notes`, `next_action`, `escalation_reason`, `escalated_at`, `follow_up_date`, `completed_by`) — auto-created on order delivered/failed
+- `tasks` (+ `outcome`, `outcome_notes`, `next_action`, `escalation_reason`, `escalated_at`, `follow_up_date`, `completed_by`, `logistics_id` nullable w/ CHECK exactly one of `merchant_id`/`logistics_id` set, `reminder_offset_hours`, `next_action_type`, `origin`) — auto-created on order delivered/failed, or manually/reschedule-created on either business's side; **pending the `orders.next_follow_up_*` addition described in Section 6**, which will become the source of truth for "what's currently scheduled"
 - `receipts` — tracks generated receipts (PDF/WhatsApp), linked to orders
 
 Royale (logistics) side:
@@ -59,7 +59,7 @@ Royale (logistics) side:
 - `royale_stock_reports`, `royale_stock_report_items` — monthly stock snapshots published to a merchant for reconciliation
 
 Shared / cross-cutting:
-- `notifications` — schema exists, **no UI built yet** (unused so far)
+- `notifications` — schema + UI complete (`notificationHelpers.js`, `NotificationBell.jsx`), all planned trigger points wired — see Section 6, B2
 - `commission_rules` — flat / percent_order / percent_profit, targetable by role or specific staff, business-scoped (works for both merchant and logistics businesses)
 - `rewards` — the universal ledger (columns: `business_id`, `staff_id`, `department`, `role_snapshot`, `reward_type`, `related_order_id`, `related_campaign_id`, `calculation_method`, `rate_snapshot`, `amount_earned`, `amount_paid`, `status`, `notes`, `reversed_reason`, `approved_by/at`, `paid_at`, timestamps)
 - `reward_payments` — payment history/audit trail against a reward (supports partial/batch payments)
@@ -159,65 +159,44 @@ Built `notificationHelpers.js` (`notify()` — fire-and-forget like `logEvent`; 
 
 **Trigger points wired:** agent assigned a delivery → notifies the agent; order delivered → notifies the assigned CS Rep; delivery failed → notifies the assigned CS Rep; COD overdue alert sent, both directions (merchant → Royale owner, **and** Royale → agent) → notifies the right recipient; task escalated to a manager → notifies that manager. Wired into `RequestsPage.jsx`, `AgentView.jsx`, `FinancePage.jsx`, `CODPage.jsx` (Royale), and `taskHelpers.js`. **All originally-planned trigger points are now covered — notification coverage is complete for this phase.**
 
-### 🚧 B3. Tasks scheduling/reminder extension — IN PROGRESS / BLOCKED pending architectural fix + end-to-end retest
+### 🚧 B3. Tasks scheduling/reminder extension — architectural fix IMPLEMENTED, awaiting deploy + end-to-end retest; one related gap found and flagged, not yet fixed
 
-**Do not treat this as complete.** End-to-end testing surfaced a significant architectural gap (see below) that must be fixed and fully retested before this can be marked done.
+**Do not mark this fully ✅ complete until (a) the deploy below is retested end-to-end and (b) the 5th-surface question at the very end of this section is resolved with the user.**
 
-**What was built and deployed so far:**
-- Schema: `tasks.logistics_id` added (nullable, alongside existing nullable `merchant_id`, with a CHECK ensuring exactly one is set) — tasks now work on **both** GlowMedals and Royale, not just the merchant side. `tasks.reminder_offset_hours` (stored for a future scheduled-reminder phase — see "architectural honesty" note below), `tasks.next_action_type` (free text), `tasks.origin` (constrained: manual/workflow/automation/customer_reschedule/delivery_failure).
-- `taskHelpers.js`: `deriveTaskStatus()` computes Upcoming/Due Today/Due Tomorrow/Overdue **live** from `due_date` (not stored, avoids drift); `createLogisticsTask()` and `createMerchantTask()` for creating tasks scoped to either business; `completeTaskWithOutcome()` extended to accept an explicit `rescheduleDate` for reschedule-type outcomes instead of a hardcoded +2-days default.
-- `TasksPage.jsx` (merchant): Due Today/Due Tomorrow/Overdue added as derived filter chips + summary cards; reschedule outcomes ("Needs Another Follow-Up", "Re-delivery Scheduled") now show a date picker.
-- `RoyaleTasksPage.jsx` (new): Royale's own Follow-ups page — same Due Today/Tomorrow/Overdue view, since Royale previously had no way to see or work logistics-scoped tasks at all. Wired into `App.jsx`, `Sidebar.jsx`, `RoyaleStaffPage.jsx` permissions.
-- **Reschedule buttons added in three places:** Royale's Requests page (📅 Log Reschedule on out-for-delivery rows), the Agent's own view (same capability from their login), and — after the user caught this was missing — GlowMedals' Orders page (📅 Reschedule on New/Assigned orders, letting a CS Rep hold an order and schedule a callback *before* confirming/sending to logistics, matching the original spec's core scenario).
-- **Architectural honesty, agreed with the user:** OpsBridge Pro has no backend server or cron (see `PROJECT_ARCHITECTURE.md`). True *proactive* reminders (notifying someone at a scheduled time even if nobody has the app open) are **not implemented** and would need a Supabase Edge Function on a schedule — a future phase. What's built instead: live-computed Due Today/Tomorrow/Overdue buckets visible whenever someone opens Tasks/Follow-ups, plus notifications firing at the moment a reschedule/assignment/escalation action actually happens.
-- **Bug found and fixed during testing:** Royale's reschedule flow initially passed `agents.id` as a task's `assigned_to`, but that column is a foreign key to `users.id` — fixed to use the agent's actual `user_id`.
+**History (kept for context, not action items anymore):**
+- End-to-end testing (merchant-side reschedule) found reschedule was built as a fire-and-forget event with no field for an order's *current* schedule, no concurrency protection, and nothing stopping two different reschedules for the same order.
+- A later session, working from a stale copy of this doc, correctly re-verified B2 as complete but — not knowing about this gap — added a **4th** uncoordinated reschedule entry point (`RoyaleTasksPage.jsx`'s Follow-ups list) using the same flawed pattern, before this fix existed. That confirmed the pattern needed fixing everywhere, not patching one surface at a time.
 
-**Important discovery — the architectural gap (why this is blocked, not done):**
+**✅ What was implemented this session (schema live in Supabase; code changes ready to deploy — see file list below):**
+- **Schema (run and confirmed in Supabase):** `orders.next_follow_up_date`, `next_follow_up_task_id` (FK → `tasks.id`), `next_action_type`, `next_follow_up_set_by` (FK → `users.id`), `next_follow_up_set_at`, `next_follow_up_reason` — all nullable/additive, verified no naming conflicts before running.
+- **New `src/lib/schedulingHelpers.js`** — the one shared source of truth:
+  - `getCurrentSchedule(orderId)` — fetches the order's active schedule + who set it (joins `users` via the explicit `orders_next_follow_up_set_by_fkey` hint, since `orders` now has two FKs to `users`)
+  - `scheduleFollowUp({...})` — the single write path for every surface. Re-fetches the schedule immediately before writing and compares against what the caller last saw (`expectedSetAt`); returns `{ conflict: true, current }` without writing if something changed since the modal opened, instead of silently overwriting. On a clean write: cancels the previous active task (never leaves two active), creates the new one via the existing `createMerchantTask`/`createLogisticsTask` helpers, updates the `orders.next_follow_up_*` pointer, logs one consistent Timeline event type (`follow_up_scheduled` — replacing the old code's inconsistent reuse of `delivery_failed`/`order_confirmed` for this purpose), and fires a notification.
+- **New `src/components/shared/ScheduleFollowUpModal.jsx`** — the one shared reschedule UI. Loads the current schedule on open; if one exists, forces an explicit "Keep Existing" / "Change Schedule" choice before revealing the date input; on a conflict response from `scheduleFollowUp`, shows the fresh schedule and lets the user decide again rather than erroring silently.
+- **`src/lib/taskHelpers.js` changes:** `createMerchantTask()`/`createLogisticsTask()` now `.select().single()` and return the created row (needed so `scheduleFollowUp` can link the new task as the order's pointer) — backward compatible, existing callers that ignored the return value are unaffected. `rescheduleTask()` is **narrowed**, not removed: it now refuses (logs an error, no-ops) if called on a task with an `order_id`, and remains legitimate only for standalone tasks with no order (an internal reminder with nothing to hold an order-level pointer for).
+- **Wired into all four originally-identified surfaces**, each now using `ScheduleFollowUpModal` instead of its own ad hoc modal + submit function:
+  - `RequestsPage.jsx` (Royale) — `scope: 'logistics'`, notifies the merchant's assigned CS Rep
+  - `AgentView.jsx` — same scope, defaults the task to the agent themselves
+  - `OrdersPage.jsx` (Merchant) — `scope: 'merchant'`, only notifies the assigned rep if it's someone other than the actor
+  - `RoyaleTasksPage.jsx` — **branches on `task.order_id`**: order-linked tasks go through the same shared modal (query extended to include `orders.merchant_id`/`assigned_cs_rep` so it can notify correctly); tasks with no `order_id` keep a simple direct-edit modal, since there's no order to hold a "current schedule" pointer for
+- All seven changed/new files passed a sandbox brace/paren balance check and a grep for dangling references to removed functions/state (`submitReschedule`, `rescheduleForm`, unused imports) before handoff.
 
-End-to-end testing (merchant-side reschedule, tested by the user directly) revealed that reschedule was built as a **fire-and-forget event**, not a proper **state change**. Specifically:
-- The Order Timeline correctly records every reschedule as history (including multiple sequential reschedules showing their different dates) — this part works.
-- But the order itself has no field showing its *current* scheduled date — you have to dig through the Timeline to find the latest one.
-- The associated Task is not reliably created/updated to reflect the new date — so there's no single, trustworthy place the assigned CS Rep or agent can look to know "what do I need to do, and when."
-- Nothing stops **two different reschedules from being created for the same order** — e.g. a manager reschedules to Friday, then later a CS Rep who didn't know that happened reschedules again to a different date, silently, with no warning.
-- There's no concurrency check — if two staff have the same order open, the second save could unknowingly overwrite a newer schedule the first person just set.
+**⚠️ NEW — a 5th uncoordinated entry point found, NOT yet fixed, needs your decision before touching it:**
+Merchant `TasksPage.jsx`'s outcome-logging flow — `completeTaskWithOutcome()`'s `RESCHEDULE_OUTCOMES` branch (the "Needs Another Follow-Up" / "Re-delivery Scheduled" outcomes a CS Rep picks after working a task) — does the **same** close-and-spawn-a-new-task pattern, for order-linked tasks, with **no** `orders.next_follow_up_*` involvement either. It has the identical flaw and was missed by the original 3-surface (then 4-surface) framing entirely. It was deliberately **not** touched this session because:
+- It's semantically different from a plain reschedule — the *old* task genuinely reached an outcome (e.g. "customer wants a callback Tuesday") and arguably should stay `completed` with that outcome recorded, not `cancelled` as "superseded" the way `scheduleFollowUp()` currently treats every old task.
+- It has commission/reorder logic threaded through the same function — not a flow to modify without your sign-off.
 
-**Root cause:** the system conflated two genuinely different concepts that need separate representation:
-1. **Timeline** = permanent historical record (already correct, don't touch)
-2. **Current schedule** = the one active, current operational state — this concept **did not exist** anywhere in the schema. Each reschedule action independently wrote a Timeline event and *attempted* to write a Task, with no shared notion of "is there already an active schedule for this order, and does this action supersede it or conflict with it."
+**Proposed fix (for your decision, not yet built):** extend `scheduleFollowUp()` with an optional parameter (e.g. `oldTaskDisposition: 'cancelled' | 'completed'`, default `'cancelled'`) so `completeTaskWithOutcome`'s reschedule branch can call the same shared function but close the old task as `'completed'` with its outcome intact, while everywhere else keeps today's `'cancelled'`-as-superseded behavior. This would bring the total to **five** surfaces on one shared function, closing the gap completely.
 
-**Approved architectural direction for the next session (NOT YET IMPLEMENTED — no SQL run, no code changed):**
-
-Add a current-schedule pointer directly on `orders`, proposed schema:
-```sql
-ALTER TABLE orders ADD COLUMN next_follow_up_date TIMESTAMPTZ;
-ALTER TABLE orders ADD COLUMN next_follow_up_task_id UUID REFERENCES tasks(id) ON DELETE SET NULL;
-ALTER TABLE orders ADD COLUMN next_action_type TEXT;
-ALTER TABLE orders ADD COLUMN next_follow_up_set_by UUID REFERENCES users(id) ON DELETE SET NULL;
-ALTER TABLE orders ADD COLUMN next_follow_up_set_at TIMESTAMPTZ;
-ALTER TABLE orders ADD COLUMN next_follow_up_reason TEXT;
-```
-
-Target invariant: **one order → one current active schedule → one current active scheduling task.** Timeline stays the full history; `orders.next_follow_up_*` + exactly one active task represent current state.
-
-**The next implementation must build ONE shared scheduling/reschedule function**, used identically by all three surfaces that currently each have their own separate (and now proven inconsistent) reschedule logic: Merchant Orders, Royale Requests, and the Agent view. That one function must handle:
-- First-time scheduling
-- Rescheduling (superseding the old task — mark it `cancelled` with a note referencing the new one, never leave two active tasks competing)
-- **Existing-schedule detection**: before saving, check `orders.next_follow_up_date`/`next_follow_up_set_by`/`next_follow_up_set_at` — if already set, show the user exactly what's there (who set it, when, why) and require an explicit choice: **Keep Existing Schedule** (do nothing) or **Change Schedule** (proceed, requires a new date)
-- **Stale/concurrent-write protection**: immediately before saving, re-fetch the order's current schedule fields and compare against what was loaded when the modal opened — if they differ, block the save and show the newer schedule instead of silently overwriting it
-- Updating `orders.next_follow_up_*`, creating/updating the one active task, logging the Timeline event, and firing the appropriate notification — all as one coherent action, not separate uncoordinated writes
-
-**Schema verification the next session must do FIRST, before writing any code:**
-- Confirm `tasks(id)` and `users(id)` are the correct reference targets for the new FKs (should be, based on existing conventions elsewhere in the schema, but verify against the live DB, not memory)
-- Confirm none of the six proposed `orders` column names conflict with anything already there
-- Confirm no unsafe migration/backfill is needed for existing order rows (nullable columns, so existing rows should be unaffected — but verify)
-- Confirm FK naming/`ON DELETE` behavior is consistent with how the rest of the schema does it
-
-**Deferred items (carried forward, unchanged):**
-- The three compact Dashboard summary widgets (CS/Royale/Merchant Due-Today/Tomorrow/Overdue counts on the main dashboard pages, not just on Tasks/Follow-ups) — not built because `MerchantDashboard.jsx`/`LogisticsDashboard.jsx` weren't in verified sandbox state during B3's build, and per `AI_RULES.md` guessing at unverified files was judged riskier than a documented gap.
+**Deferred items (carried forward, unchanged except as noted):**
+- The 5th-surface fix above — now the actual remaining blocking item for calling B3 fully done.
+- The three compact Dashboard summary widgets (CS/Royale/Merchant Due-Today/Tomorrow/Overdue counts on the main dashboard pages) — still not built, same reason as before (unverified sandbox state for `MerchantDashboard.jsx`/`LogisticsDashboard.jsx`).
 - Automatic Order Assignment, Cart Abandoned Tracking, Form Analytics, Mobile App View (unchanged from before).
 - True scheduled/proactive reminders (needs Supabase Edge Functions + cron — later phase, not this one).
 
-**Exact next task:** begin by reviewing this section and `PROJECT_ARCHITECTURE.md` against the live schema, verify the proposed SQL above, then implement the single shared scheduling function and apply it consistently across all three surfaces. **Do not mark B3 complete until the full merchant + Royale + Agent reschedule flow has been retested end-to-end**, including the existing-schedule warning and the concurrency check.
+**Exact next task:** (1) deploy the 7 files below and retest the full merchant + Royale + Agent + Royale-Tasks reschedule flow end-to-end, including the existing-schedule warning and a deliberate two-tab concurrency test; (2) decide with the user whether/how to extend `scheduleFollowUp()` to cover `TasksPage.jsx`'s outcome-driven reschedule (5th surface, above) before marking B3 done.
+
+**Files changed this session (hand these, not a description, to whichever session does the retest or the 5th-surface fix):** `src/lib/schedulingHelpers.js` (new), `src/components/shared/ScheduleFollowUpModal.jsx` (new), `src/lib/taskHelpers.js`, `src/pages/logistics/RequestsPage.jsx`, `src/pages/logistics/AgentView.jsx`, `src/pages/merchant/OrdersPage.jsx`, `src/pages/logistics/RoyaleTasksPage.jsx` — plus `src/pages/merchant/TasksPage.jsx` once the 5th-surface decision above is made (not modified yet).
 
 ---
 

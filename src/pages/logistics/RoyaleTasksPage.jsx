@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../contexts/AuthContext'
 import { deriveTaskStatus, FOLLOW_UP_STATUS_LABELS, FOLLOW_UP_STATUS_STYLES, rescheduleTask } from '../../lib/taskHelpers'
+import ScheduleFollowUpModal from '../../components/shared/ScheduleFollowUpModal'
 
 const PRIORITY_STYLES = {
   high: 'bg-red-50 text-red-700 border-red-200',
@@ -36,7 +37,12 @@ export default function RoyaleTasksPage() {
   const [staff, setStaff] = useState([])
   const [filter, setFilter] = useState('pending')
   const [loading, setLoading] = useState(true)
-  const [rescheduleModal, setRescheduleModal] = useState(null)
+  // Order-linked tasks reschedule through the shared, concurrency-protected
+  // modal (scheduleFollowUp). Standalone tasks (no order_id — e.g. an
+  // internal admin reminder) have no order to hold a "current schedule"
+  // pointer for, so they keep the simpler direct edit below.
+  const [scheduleModalTask, setScheduleModalTask] = useState(null)
+  const [standaloneModal, setStandaloneModal] = useState(null)
   const [rescheduleDate, setRescheduleDate] = useState('')
   const [rescheduleReason, setRescheduleReason] = useState('')
   const [saving, setSaving] = useState(false)
@@ -47,7 +53,7 @@ export default function RoyaleTasksPage() {
     const bid = profile.business_id
     const [tRes, sRes] = await Promise.all([
       supabase.from('tasks')
-        .select('*, users!tasks_assigned_to_fkey(full_name), orders(id, delivery_state, customers(full_name, phone))')
+        .select('*, users!tasks_assigned_to_fkey(full_name), orders(id, delivery_state, merchant_id, assigned_cs_rep, customers(full_name, phone))')
         .eq('logistics_id', bid)
         .order('due_date', { ascending: true, nullsFirst: false }),
       supabase.from('users').select('id, full_name').eq('business_id', bid),
@@ -70,21 +76,25 @@ export default function RoyaleTasksPage() {
   }
 
   function openReschedule(task) {
-    setRescheduleModal(task)
-    setRescheduleDate('')
-    setRescheduleReason('')
+    if (task.order_id) {
+      setScheduleModalTask(task)
+    } else {
+      setStandaloneModal(task)
+      setRescheduleDate('')
+      setRescheduleReason('')
+    }
   }
 
-  async function handleReschedule() {
-    if (!rescheduleModal || !rescheduleDate) return
+  async function handleStandaloneReschedule() {
+    if (!standaloneModal || !rescheduleDate) return
     setSaving(true)
     await rescheduleTask({
-      task: rescheduleModal,
+      task: standaloneModal,
       newDate: rescheduleDate,
       rescheduledBy: profile.id,
       reason: rescheduleReason || null,
     })
-    setRescheduleModal(null)
+    setStandaloneModal(null)
     setRescheduleDate('')
     setRescheduleReason('')
     load()
@@ -205,15 +215,32 @@ export default function RoyaleTasksPage() {
         })}
       </div>
 
-      {rescheduleModal && (
+      {scheduleModalTask && (
+        <ScheduleFollowUpModal
+          heading="Reschedule Follow-up"
+          order={{ id: scheduleModalTask.order_id, customerName: scheduleModalTask.orders?.customers?.full_name }}
+          scope="logistics"
+          businessId={profile.business_id}
+          actorId={profile.id}
+          actorName={profile.full_name}
+          defaultAssignedTo={scheduleModalTask.assigned_to}
+          actionType={scheduleModalTask.next_action_type || 'Follow Up'}
+          taskTitle={scheduleModalTask.title}
+          notifyRecipientId={scheduleModalTask.orders?.assigned_cs_rep}
+          notifyBusinessId={scheduleModalTask.orders?.merchant_id}
+          helperText="This closes the current follow-up and creates a new one at the date you pick — nothing is deleted."
+          onClose={() => setScheduleModalTask(null)}
+          onSuccess={() => { setScheduleModalTask(null); load() }}
+        />
+      )}
+
+      {/* Standalone (no order_id) tasks — no order-level schedule pointer applies, so this stays a simple direct edit */}
+      {standaloneModal && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center p-4">
           <div className="bg-white rounded-2xl w-full max-w-sm shadow-panel p-5 space-y-4">
             <h3 className="font-semibold text-ink-900">Reschedule Follow-up</h3>
             <div className="bg-surface-50 rounded-xl p-3">
-              <p className="text-sm font-semibold text-ink-900">{rescheduleModal.title}</p>
-              {rescheduleModal.orders?.customers && (
-                <p className="text-xs text-ink-500 mt-0.5">{rescheduleModal.orders.customers.full_name}</p>
-              )}
+              <p className="text-sm font-semibold text-ink-900">{standaloneModal.title}</p>
             </div>
             <div>
               <label className="label">New Follow-Up Date</label>
@@ -222,12 +249,12 @@ export default function RoyaleTasksPage() {
             </div>
             <div>
               <label className="label">Reason <span className="text-ink-300 font-normal normal-case">(optional)</span></label>
-              <textarea className="input" rows={2} value={rescheduleReason} onChange={e => setRescheduleReason(e.target.value)} placeholder="e.g. Agent asked to push to Tuesday…" />
+              <textarea className="input" rows={2} value={rescheduleReason} onChange={e => setRescheduleReason(e.target.value)} placeholder="e.g. Pushed to Tuesday…" />
             </div>
             <p className="text-xs text-ink-400">This closes the current follow-up and creates a new one at the date you pick — nothing is deleted.</p>
             <div className="flex gap-3">
-              <button onClick={() => setRescheduleModal(null)} className="btn-secondary flex-1">Cancel</button>
-              <button onClick={handleReschedule} disabled={saving || !rescheduleDate} className="btn-primary flex-1">{saving ? 'Saving…' : 'Reschedule'}</button>
+              <button onClick={() => setStandaloneModal(null)} className="btn-secondary flex-1">Cancel</button>
+              <button onClick={handleStandaloneReschedule} disabled={saving || !rescheduleDate} className="btn-primary flex-1">{saving ? 'Saving…' : 'Reschedule'}</button>
             </div>
           </div>
         </div>

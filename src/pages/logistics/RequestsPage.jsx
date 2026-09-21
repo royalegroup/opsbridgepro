@@ -3,12 +3,13 @@ import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../contexts/AuthContext'
 import Badge from '../../components/shared/Badge'
 import { deductAgentStockOnDelivery } from '../../lib/stockHelpers'
-import { createFollowUpTask, createLogisticsTask } from '../../lib/taskHelpers'
+import { createFollowUpTask } from '../../lib/taskHelpers'
 import { createCODRecord } from '../../lib/codHelpers'
 import { awardOrderCommission } from '../../lib/rewardsHelpers'
 import { logEvent } from '../../lib/orderEventHelpers'
 import { notify } from '../../lib/notificationHelpers'
 import OrderTimeline from '../../components/shared/OrderTimeline'
+import ScheduleFollowUpModal from '../../components/shared/ScheduleFollowUpModal'
 
 export default function RequestsPage() {
   const { profile } = useAuth()
@@ -18,8 +19,6 @@ export default function RequestsPage() {
   const [failReason, setFailReason] = useState({})
   const [timelineOrderId, setTimelineOrderId] = useState(null)
   const [rescheduleModal, setRescheduleModal] = useState(null)
-  const [rescheduleForm, setRescheduleForm] = useState({ date: '', notes: '' })
-  const [rescheduleSaving, setRescheduleSaving] = useState(false)
 
   useEffect(() => { if (profile?.business_id) load() }, [profile])
 
@@ -159,53 +158,6 @@ export default function RequestsPage() {
     load()
   }
 
-  async function submitReschedule() {
-    if (!rescheduleModal || !rescheduleForm.date) return
-    setRescheduleSaving(true)
-
-    const orderId = rescheduleModal.orders?.id
-    const csRep = rescheduleModal.orders?.assigned_cs_rep
-
-    await createLogisticsTask({
-      logisticsId: profile.business_id,
-      orderId,
-      assignedTo: rescheduleModal.agents?.user_id,
-      title: `Redeliver to ${rescheduleModal.orders?.customers?.full_name || 'customer'}`,
-      notes: rescheduleForm.notes,
-      dueDate: new Date(rescheduleForm.date).toISOString(),
-      priority: 'high',
-      nextActionType: 'Attempt Redelivery',
-      origin: 'customer_reschedule',
-      createdBy: profile.id,
-    })
-
-    if (orderId) {
-      await logEvent({
-        orderId,
-        eventType: 'delivery_failed',
-        description: `Customer requested reschedule to ${new Date(rescheduleForm.date).toLocaleDateString('en-NG')}`,
-        actorId: profile.id,
-        visibilityLevel: 'public',
-      })
-    }
-
-    if (csRep) {
-      await notify({
-        recipientId: csRep,
-        businessId: rescheduleModal.orders?.merchant_id,
-        type: 'delivery_update',
-        title: 'Customer rescheduled delivery',
-        message: `${rescheduleModal.orders?.customers?.full_name || 'Customer'} asked for redelivery on ${new Date(rescheduleForm.date).toLocaleDateString('en-NG')}.`,
-        referenceId: orderId,
-        referenceType: 'order',
-      })
-    }
-
-    setRescheduleModal(null)
-    setRescheduleForm({ date: '', notes: '' })
-    setRescheduleSaving(false)
-  }
-
   const STATUSES = ['all', 'pending', 'assigned', 'out_for_delivery', 'delivered', 'failed']
   const filtered = filter === 'all' ? requests : requests.filter(r => r.status === filter)
 
@@ -292,7 +244,7 @@ export default function RequestsPage() {
                         className="text-xs px-3 py-1.5 rounded-lg bg-red-50 text-red-600 font-medium hover:bg-red-100">
                         Mark Failed ✗
                       </button>
-                      <button onClick={() => { setRescheduleModal(r); setRescheduleForm({ date: '', notes: '' }) }}
+                      <button onClick={() => setRescheduleModal(r)}
                         className="text-xs px-3 py-1.5 rounded-lg bg-amber-50 text-amber-700 font-medium hover:bg-amber-100">
                         📅 Log Reschedule
                       </button>
@@ -320,32 +272,22 @@ export default function RequestsPage() {
       )}
 
       {rescheduleModal && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl w-full max-w-sm shadow-panel p-5 space-y-4">
-            <h3 className="font-semibold text-ink-900">Log Reschedule</h3>
-            <div className="bg-amber-50 rounded-xl p-3">
-              <p className="text-sm font-medium text-amber-800">{rescheduleModal.orders?.customers?.full_name}</p>
-              <p className="text-xs text-amber-600 mt-0.5">{rescheduleModal.orders?.delivery_state}</p>
-            </div>
-            <div>
-              <label className="label">New Delivery Date</label>
-              <input type="date" className="input" min={new Date().toISOString().split('T')[0]}
-                value={rescheduleForm.date} onChange={e => setRescheduleForm(f => ({ ...f, date: e.target.value }))} />
-            </div>
-            <div>
-              <label className="label">Notes <span className="text-ink-300 font-normal normal-case">(optional)</span></label>
-              <textarea className="input" rows={2} value={rescheduleForm.notes}
-                onChange={e => setRescheduleForm(f => ({ ...f, notes: e.target.value }))} placeholder="e.g. Customer travelling, back Tuesday" />
-            </div>
-            <p className="text-xs text-ink-400">This creates a redelivery follow-up and notifies the merchant's CS Rep.</p>
-            <div className="flex gap-3">
-              <button onClick={() => setRescheduleModal(null)} className="btn-secondary flex-1">Cancel</button>
-              <button onClick={submitReschedule} disabled={rescheduleSaving || !rescheduleForm.date} className="btn-primary flex-1">
-                {rescheduleSaving ? 'Saving…' : 'Save Reschedule'}
-              </button>
-            </div>
-          </div>
-        </div>
+        <ScheduleFollowUpModal
+          heading="Log Reschedule"
+          order={{ id: rescheduleModal.orders?.id, customerName: rescheduleModal.orders?.customers?.full_name }}
+          scope="logistics"
+          businessId={profile.business_id}
+          actorId={profile.id}
+          actorName={profile.full_name}
+          defaultAssignedTo={rescheduleModal.agents?.user_id}
+          actionType="Attempt Redelivery"
+          taskTitle={`Redeliver to ${rescheduleModal.orders?.customers?.full_name || 'customer'}`}
+          notifyRecipientId={rescheduleModal.orders?.assigned_cs_rep}
+          notifyBusinessId={rescheduleModal.orders?.merchant_id}
+          helperText="This creates a redelivery follow-up and notifies the merchant's CS Rep."
+          onClose={() => setRescheduleModal(null)}
+          onSuccess={() => { setRescheduleModal(null); load() }}
+        />
       )}
     </div>
   )
