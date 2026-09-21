@@ -221,3 +221,43 @@ export async function completeTaskWithOutcome({ taskId, outcome, outcomeNotes, n
 
   await supabase.from('tasks').update(updates).eq('id', taskId)
 }
+
+/**
+ * Quick reschedule for tasks that don't go through the full outcome-picker flow
+ * (e.g. Royale's simpler Tasks dashboard, which doesn't use TASK_OUTCOMES per
+ * type). Deliberately mirrors the RESCHEDULE_OUTCOMES branch of
+ * completeTaskWithOutcome above — same two-step pattern (complete the current
+ * task, spawn a new one at the new date) so both sides leave an identical
+ * audit trail rather than two different reschedule behaviors existing in the
+ * same app. Stores outcome 'needs_another_follow_up' on the closed task so it
+ * reads consistently in history even though no outcome-picker was shown.
+ */
+export async function rescheduleTask({ task, newDate, rescheduledBy, reason }) {
+  if (!task || !newDate) return
+
+  await supabase.from('tasks').update({
+    status: 'completed',
+    outcome: 'needs_another_follow_up',
+    outcome_notes: reason || 'Rescheduled',
+    completed_by: rescheduledBy || null,
+    completed_at: new Date().toISOString(),
+  }).eq('id', task.id)
+
+  const { error } = await supabase.from('tasks').insert({
+    merchant_id: task.merchant_id || null,
+    logistics_id: task.logistics_id || null,
+    order_id: task.order_id,
+    assigned_to: task.assigned_to,
+    type: task.type,
+    title: `Follow-Up: ${task.title}`,
+    notes: reason ? `Rescheduled: ${reason}` : 'Rescheduled',
+    status: 'pending',
+    priority: task.priority,
+    due_date: new Date(newDate).toISOString(),
+    origin: 'customer_reschedule',
+    next_action_type: task.next_action_type || null,
+    reminder_offset_hours: 24,
+  })
+
+  if (error) console.error('Reschedule task creation error:', error)
+}

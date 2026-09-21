@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../contexts/AuthContext'
-import { deriveTaskStatus, FOLLOW_UP_STATUS_LABELS, FOLLOW_UP_STATUS_STYLES } from '../../lib/taskHelpers'
+import { deriveTaskStatus, FOLLOW_UP_STATUS_LABELS, FOLLOW_UP_STATUS_STYLES, rescheduleTask } from '../../lib/taskHelpers'
 
 const PRIORITY_STYLES = {
   high: 'bg-red-50 text-red-700 border-red-200',
@@ -36,6 +36,10 @@ export default function RoyaleTasksPage() {
   const [staff, setStaff] = useState([])
   const [filter, setFilter] = useState('pending')
   const [loading, setLoading] = useState(true)
+  const [rescheduleModal, setRescheduleModal] = useState(null)
+  const [rescheduleDate, setRescheduleDate] = useState('')
+  const [rescheduleReason, setRescheduleReason] = useState('')
+  const [saving, setSaving] = useState(false)
 
   useEffect(() => { if (profile?.business_id) load() }, [profile])
 
@@ -63,6 +67,28 @@ export default function RoyaleTasksPage() {
   async function reassign(taskId, userId) {
     await supabase.from('tasks').update({ assigned_to: userId }).eq('id', taskId)
     load()
+  }
+
+  function openReschedule(task) {
+    setRescheduleModal(task)
+    setRescheduleDate('')
+    setRescheduleReason('')
+  }
+
+  async function handleReschedule() {
+    if (!rescheduleModal || !rescheduleDate) return
+    setSaving(true)
+    await rescheduleTask({
+      task: rescheduleModal,
+      newDate: rescheduleDate,
+      rescheduledBy: profile.id,
+      reason: rescheduleReason || null,
+    })
+    setRescheduleModal(null)
+    setRescheduleDate('')
+    setRescheduleReason('')
+    load()
+    setSaving(false)
   }
 
   const filtered = tasks.filter(t => {
@@ -163,6 +189,7 @@ export default function RoyaleTasksPage() {
                     <button onClick={() => updateStatus(task.id, 'in_progress')} className="text-xs px-3 py-1.5 rounded-lg bg-blue-50 text-blue-700 font-medium hover:bg-blue-100">Start</button>
                   )}
                   <button onClick={() => updateStatus(task.id, 'completed')} className="text-xs px-3 py-1.5 rounded-lg bg-green-50 text-green-700 font-medium hover:bg-green-100">Mark Done ✓</button>
+                  <button onClick={() => openReschedule(task)} className="text-xs px-3 py-1.5 rounded-lg bg-amber-50 text-amber-700 font-medium hover:bg-amber-100">Reschedule 🔁</button>
                   <button onClick={() => updateStatus(task.id, 'cancelled')} className="text-xs px-3 py-1.5 rounded-lg bg-gray-50 text-gray-500 font-medium hover:bg-gray-100">Cancel</button>
                   {staff.length > 0 && (
                     <select onChange={e => reassign(task.id, e.target.value)} value={task.assigned_to || ''}
@@ -177,6 +204,34 @@ export default function RoyaleTasksPage() {
           )
         })}
       </div>
+
+      {rescheduleModal && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center p-4">
+          <div className="bg-white rounded-2xl w-full max-w-sm shadow-panel p-5 space-y-4">
+            <h3 className="font-semibold text-ink-900">Reschedule Follow-up</h3>
+            <div className="bg-surface-50 rounded-xl p-3">
+              <p className="text-sm font-semibold text-ink-900">{rescheduleModal.title}</p>
+              {rescheduleModal.orders?.customers && (
+                <p className="text-xs text-ink-500 mt-0.5">{rescheduleModal.orders.customers.full_name}</p>
+              )}
+            </div>
+            <div>
+              <label className="label">New Follow-Up Date</label>
+              <input type="date" className="input" min={new Date().toISOString().split('T')[0]}
+                value={rescheduleDate} onChange={e => setRescheduleDate(e.target.value)} />
+            </div>
+            <div>
+              <label className="label">Reason <span className="text-ink-300 font-normal normal-case">(optional)</span></label>
+              <textarea className="input" rows={2} value={rescheduleReason} onChange={e => setRescheduleReason(e.target.value)} placeholder="e.g. Agent asked to push to Tuesday…" />
+            </div>
+            <p className="text-xs text-ink-400">This closes the current follow-up and creates a new one at the date you pick — nothing is deleted.</p>
+            <div className="flex gap-3">
+              <button onClick={() => setRescheduleModal(null)} className="btn-secondary flex-1">Cancel</button>
+              <button onClick={handleReschedule} disabled={saving || !rescheduleDate} className="btn-primary flex-1">{saving ? 'Saving…' : 'Reschedule'}</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
