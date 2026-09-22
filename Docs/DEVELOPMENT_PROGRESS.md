@@ -1,6 +1,6 @@
 # OpsBridge Pro — Development Progress & Handoff
 
-**Last updated:** After implementing the B3 architectural fix (shared `scheduleFollowUp()` across all 4 known surfaces) — awaiting deploy + retest, plus a newly found 5th surface flagged for decision. See Section 6, B3.
+**Last updated:** B3 architectural fix deployed, retested, and confirmed working across all 4 surfaces (including a PGRST201 relationship-ambiguity bug found and fixed during retest). Only the 5th-surface decision remains before B3 is fully done. See Section 6, B3.
 **Purpose:** Any Claude session (or developer) should be able to read this file and resume work immediately without re-analyzing the codebase or re-asking the user for context already established.
 
 ---
@@ -194,9 +194,14 @@ Merchant `TasksPage.jsx`'s outcome-logging flow — `completeTaskWithOutcome()`'
 - Automatic Order Assignment, Cart Abandoned Tracking, Form Analytics, Mobile App View (unchanged from before).
 - True scheduled/proactive reminders (needs Supabase Edge Functions + cron — later phase, not this one).
 
-**Exact next task:** (1) deploy the 7 files below and retest the full merchant + Royale + Agent + Royale-Tasks reschedule flow end-to-end, including the existing-schedule warning and a deliberate two-tab concurrency test; (2) decide with the user whether/how to extend `scheduleFollowUp()` to cover `TasksPage.jsx`'s outcome-driven reschedule (5th surface, above) before marking B3 done.
+**✅ Deployed and retested — confirmed working (all 4 surfaces + both protections):** Royale Requests page, Agent view, GlowMedals Orders page, and Royale's Follow-ups page all confirmed creating correct follow-up tasks; the "already scheduled" warning and the two-tab concurrency check both confirmed working as designed.
 
-**Files changed this session (hand these, not a description, to whichever session does the retest or the 5th-surface fix):** `src/lib/schedulingHelpers.js` (new), `src/components/shared/ScheduleFollowUpModal.jsx` (new), `src/lib/taskHelpers.js`, `src/pages/logistics/RequestsPage.jsx`, `src/pages/logistics/AgentView.jsx`, `src/pages/merchant/OrdersPage.jsx`, `src/pages/logistics/RoyaleTasksPage.jsx` — plus `src/pages/merchant/TasksPage.jsx` once the 5th-surface decision above is made (not modified yet).
+**🐛 Bug found and fixed during retest — worth remembering for future schema changes:** Royale's Follow-ups page came up completely empty after deploy (`No pending follow-ups`), even for tasks that definitely existed with correct data — confirmed via a direct SQL check that the rows were there, correctly tagged, before touching any code. Root cause: adding `orders.next_follow_up_task_id` (a new FK from `orders` to `tasks`) gave PostgREST **two** relationships between `tasks` and `orders` instead of one, so any query embedding `orders` inside a `tasks` select without explicitly naming which relationship to use now fails with `PGRST201` ("more than one relationship was found"). `RoyaleTasksPage.jsx`'s query was the only place with this pattern *and* no explicit relationship hint — fixed by changing `orders(...)` to `orders!tasks_order_id_fkey(...)`. Cross-checked `TasksPage.jsx` (merchant) and every other file touched this session — `TasksPage.jsx` already used the explicit hint (confirming `tasks_order_id_fkey` as the correct constraint name) and nothing else in the codebase had the unguarded pattern.
+**Lesson for next time an FK is added between two tables that already have tasks/queries embedding one inside the other: grep the whole codebase for `.from('<table>')` selects embedding the other table, and add an explicit `!constraint_name` hint to each one, *before* considering the migration done** — this class of bug produces no console error by default (the query just returns nothing) unless the calling code explicitly logs `.error`, which `RoyaleTasksPage.jsx` didn't until this fix added it.
+
+**Exact next task:** decide with the user whether/how to extend `scheduleFollowUp()` to cover `TasksPage.jsx`'s outcome-driven reschedule (5th surface, above) before marking B3 fully done.
+
+**Files changed this session (hand these, not a description, to whichever session does the 5th-surface fix):** `src/lib/schedulingHelpers.js` (new), `src/components/shared/ScheduleFollowUpModal.jsx` (new), `src/lib/taskHelpers.js`, `src/pages/logistics/RequestsPage.jsx`, `src/pages/logistics/AgentView.jsx`, `src/pages/merchant/OrdersPage.jsx`, `src/pages/logistics/RoyaleTasksPage.jsx` (now includes the `tasks_order_id_fkey` fix + error logging in `load()`) — plus `src/pages/merchant/TasksPage.jsx` once the 5th-surface decision above is made (confirmed already safe from the PGRST201 issue; not otherwise modified).
 
 ---
 
