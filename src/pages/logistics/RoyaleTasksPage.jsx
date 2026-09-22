@@ -53,7 +53,7 @@ export default function RoyaleTasksPage() {
     const bid = profile.business_id
     const [tRes, sRes] = await Promise.all([
       supabase.from('tasks')
-        .select('*, users!tasks_assigned_to_fkey(full_name), orders(id, delivery_state, merchant_id, assigned_cs_rep, customers(full_name, phone))')
+        .select('*, users!tasks_assigned_to_fkey(full_name), orders!tasks_order_id_fkey(id, delivery_state, merchant_id, assigned_cs_rep, customers(full_name, phone))')
         .eq('logistics_id', bid)
         .order('due_date', { ascending: true, nullsFirst: false }),
       supabase.from('users').select('id, full_name').eq('business_id', bid),
