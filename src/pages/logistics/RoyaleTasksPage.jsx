@@ -58,6 +58,8 @@ export default function RoyaleTasksPage() {
         .order('due_date', { ascending: true, nullsFirst: false }),
       supabase.from('users').select('id, full_name').eq('business_id', bid),
     ])
+    if (tRes.error) console.error('RoyaleTasksPage: tasks fetch error:', tRes.error)
+    if (sRes.error) console.error('RoyaleTasksPage: staff fetch error:', sRes.error)
     if (tRes.data) setTasks(tRes.data)
     if (sRes.data) setStaff(sRes.data)
     setLoading(false)
