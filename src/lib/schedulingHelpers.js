@@ -1,7 +1,55 @@
 import { supabase } from './supabase'
 import { logEvent } from './orderEventHelpers'
 import { notify } from './notificationHelpers'
-import { createMerchantTask, createLogisticsTask } from './taskHelpers'
+
+/**
+ * Moved here from taskHelpers.js so schedulingHelpers.js is self-contained
+ * and taskHelpers.js can safely import scheduleFollowUp() below without a
+ * circular import (taskHelpers.js -> schedulingHelpers.js -> taskHelpers.js
+ * would otherwise exist). Nothing else in the app imports these two directly
+ * — confirmed by grep before moving them — so this is a safe, contained move.
+ */
+export async function createMerchantTask({ merchantId, orderId, assignedTo, title, notes, dueDate, priority = 'normal', nextActionType, origin = 'customer_reschedule', createdBy }) {
+  if (!merchantId || !title) return null
+  const { data, error } = await supabase.from('tasks').insert({
+    merchant_id: merchantId,
+    order_id: orderId || null,
+    assigned_to: assignedTo || null,
+    created_by: createdBy || null,
+    type: 'manual',
+    title,
+    notes: notes || null,
+    status: 'pending',
+    priority,
+    due_date: dueDate,
+    origin,
+    next_action_type: nextActionType || null,
+    reminder_offset_hours: 24,
+  }).select().single()
+  if (error) { console.error('Merchant task creation error:', error); return null }
+  return data
+}
+
+export async function createLogisticsTask({ logisticsId, orderId, assignedTo, title, notes, dueDate, priority = 'normal', nextActionType, origin = 'customer_reschedule', createdBy }) {
+  if (!logisticsId || !title) return null
+  const { data, error } = await supabase.from('tasks').insert({
+    logistics_id: logisticsId,
+    order_id: orderId || null,
+    assigned_to: assignedTo || null,
+    created_by: createdBy || null,
+    type: 'manual',
+    title,
+    notes: notes || null,
+    status: 'pending',
+    priority,
+    due_date: dueDate,
+    origin,
+    next_action_type: nextActionType || null,
+    reminder_offset_hours: 24,
+  }).select().single()
+  if (error) { console.error('Logistics task creation error:', error); return null }
+  return data
+}
 
 /**
  * Fetches an order's CURRENT active follow-up schedule, if any. This is the
@@ -58,11 +106,30 @@ export async function getCurrentSchedule(orderId) {
  * @param {string}  [notifyRecipientId] - optional: who to notify (skipped if omitted)
  * @param {string}  [notifyBusinessId]  - business_id to notify against
  * @param {string}  [notifyMessage]     - optional custom message; a sensible default is used otherwise
+ * @param {string}  [oldTaskId]         - explicit task to close, if it's not (or might not be) the
+ *   order's current pointer task — e.g. the outcome-driven reschedule flow closes the SPECIFIC
+ *   task the user just finished working, which may differ from (or simply not yet be) the order's
+ *   registered pointer. If the pointer task is a different id, it is ALSO closed (as 'cancelled',
+ *   never left dangling) — this one always gets `oldTaskDisposition`.
+ * @param {'cancelled'|'completed'} [oldTaskDisposition='cancelled'] - how to close `oldTaskId`
+ *   (or the pointer task, if `oldTaskId` is omitted). 'cancelled' = superseded, the behavior all
+ *   four original surfaces use. 'completed' = the task genuinely reached an outcome — used by
+ *   completeTaskWithOutcome() so the CS Rep's outcome record is preserved, not overwritten with
+ *   a generic "superseded" note.
+ * @param {object}  [oldTaskOutcomeFields] - required when oldTaskDisposition === 'completed';
+ *   fields merged into the old task's update (e.g. { outcome, outcome_notes, next_action, completed_by })
+ * @param {boolean} [autoRetryOnConflict=false] - for callers with no interactive "keep/change"
+ *   dialog (currently only the outcome-driven flow): on a concurrency conflict, automatically
+ *   retries once against the freshly-seen schedule instead of surfacing { conflict: true } —
+ *   appropriate only when the caller's action is itself a deliberate, real scheduling decision
+ *   (not a background write), same as if the user re-opened the modal and confirmed again.
  */
 export async function scheduleFollowUp({
   orderId, newDate, reason, actionType, assignedTo, scope, businessId,
   actorId, actorName, taskTitle, expectedSetAt = null, priority = 'high',
   notifyRecipientId, notifyBusinessId, notifyMessage,
+  oldTaskId = null, oldTaskDisposition = 'cancelled', oldTaskOutcomeFields = null,
+  autoRetryOnConflict = false, _retriesLeft = 1,
 }) {
   if (!orderId || !newDate || !scope || !businessId) return { error: 'Missing required scheduling info' }
 
@@ -72,15 +139,40 @@ export async function scheduleFollowUp({
 
   const freshSetAt = fresh.next_follow_up_set_at || null
   if (freshSetAt !== expectedSetAt) {
+    if (autoRetryOnConflict && _retriesLeft > 0) {
+      return scheduleFollowUp({
+        orderId, newDate, reason, actionType, assignedTo, scope, businessId,
+        actorId, actorName, taskTitle, expectedSetAt: freshSetAt, priority,
+        notifyRecipientId, notifyBusinessId, notifyMessage,
+        oldTaskId, oldTaskDisposition, oldTaskOutcomeFields,
+        autoRetryOnConflict, _retriesLeft: _retriesLeft - 1,
+      })
+    }
     return { conflict: true, current: fresh }
   }
 
-  // Supersede the previous active task, if one exists — never leave two active tasks competing
-  if (fresh.next_follow_up_task_id) {
-    await supabase.from('tasks').update({
-      status: 'cancelled',
-      outcome_notes: `Superseded — rescheduled to ${new Date(newDate).toLocaleDateString('en-NG')}`,
-    }).eq('id', fresh.next_follow_up_task_id)
+  // Close out whichever task(s) need closing — never leave two active tasks competing.
+  // Usually this is one task (oldTaskId === the order's current pointer, or the pointer
+  // is null on a first-time schedule). If a caller passes an oldTaskId that differs from
+  // the order's actual current pointer, BOTH are closed: oldTaskId gets the disposition
+  // the caller asked for, the stale pointer task (now truly superseded) gets 'cancelled'.
+  const toClose = new Map()
+  if (fresh.next_follow_up_task_id) toClose.set(fresh.next_follow_up_task_id, { disposition: 'cancelled' })
+  if (oldTaskId) toClose.set(oldTaskId, { disposition: oldTaskDisposition, fields: oldTaskOutcomeFields })
+
+  for (const [id, info] of toClose) {
+    if (info.disposition === 'completed') {
+      await supabase.from('tasks').update({
+        status: 'completed',
+        completed_at: new Date().toISOString(),
+        ...(info.fields || {}),
+      }).eq('id', id)
+    } else {
+      await supabase.from('tasks').update({
+        status: 'cancelled',
+        outcome_notes: `Superseded — rescheduled to ${new Date(newDate).toLocaleDateString('en-NG')}`,
+      }).eq('id', id)
+    }
   }
 
   // Create the new task via the existing scoped helpers, not a duplicate insert

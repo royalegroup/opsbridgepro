@@ -1,5 +1,6 @@
 import { supabase } from './supabase'
 import { notify } from './notificationHelpers'
+import { scheduleFollowUp, getCurrentSchedule } from './schedulingHelpers'
 
 export const TASK_OUTCOMES = {
   follow_up_delivered: [
@@ -106,58 +107,10 @@ export async function createFollowUpTask(order, status, merchantId) {
   if (error) console.error('Task creation error:', error)
 }
 
-/**
- * Creates a task on the merchant (GlowMedals) side — e.g. when a CS Rep
- * confirms with the customer that they want a delivery/callback on a specific
- * future date, before the order is even sent to logistics. Mirrors
- * createLogisticsTask's shape but scoped by merchant_id instead of logistics_id.
- */
-export async function createMerchantTask({ merchantId, orderId, assignedTo, title, notes, dueDate, priority = 'normal', nextActionType, origin = 'customer_reschedule', createdBy }) {
-  if (!merchantId || !title) return null
-  const { data, error } = await supabase.from('tasks').insert({
-    merchant_id: merchantId,
-    order_id: orderId || null,
-    assigned_to: assignedTo || null,
-    created_by: createdBy || null,
-    type: 'manual',
-    title,
-    notes: notes || null,
-    status: 'pending',
-    priority,
-    due_date: dueDate,
-    origin,
-    next_action_type: nextActionType || null,
-    reminder_offset_hours: 24,
-  }).select().single()
-  if (error) { console.error('Merchant task creation error:', error); return null }
-  return data
-}
-
-/**
- * Creates a task on the logistics (Royale) side — e.g. when a customer
- * requests a delivery reschedule during an attempt. Mirrors createFollowUpTask's
- * shape but scoped by logistics_id instead of merchant_id.
- */
-export async function createLogisticsTask({ logisticsId, orderId, assignedTo, title, notes, dueDate, priority = 'normal', nextActionType, origin = 'customer_reschedule', createdBy }) {
-  if (!logisticsId || !title) return null
-  const { data, error } = await supabase.from('tasks').insert({
-    logistics_id: logisticsId,
-    order_id: orderId || null,
-    assigned_to: assignedTo || null,
-    created_by: createdBy || null,
-    type: 'manual',
-    title,
-    notes: notes || null,
-    status: 'pending',
-    priority,
-    due_date: dueDate,
-    origin,
-    next_action_type: nextActionType || null,
-    reminder_offset_hours: 24,
-  }).select().single()
-  if (error) { console.error('Logistics task creation error:', error); return null }
-  return data
-}
+// createMerchantTask() and createLogisticsTask() moved to schedulingHelpers.js
+// (this architectural fix) — that file needed them, and this file now needs to
+// import scheduleFollowUp() from there, so keeping them here would create a
+// circular import. Nothing else in the app imported them from here directly.
 
 export async function completeTaskWithOutcome({ taskId, outcome, outcomeNotes, nextAction, completedBy, task, profile, rescheduleDate }) {
   const updates = {
@@ -195,15 +148,62 @@ export async function completeTaskWithOutcome({ taskId, outcome, outcomeNotes, n
       })
     }
   } else if (RESCHEDULE_OUTCOMES.includes(outcome)) {
-    updates.status = 'completed'
     // Use the explicit date the user picked; fall back to +2 days only if none given
     const followUpDate = rescheduleDate ? new Date(rescheduleDate) : new Date()
     if (!rescheduleDate) followUpDate.setDate(followUpDate.getDate() + 2)
 
+    if (task.order_id) {
+      // Route through the same shared, conflict-protected scheduling system the
+      // other four reschedule surfaces use (schedulingHelpers.js). The one
+      // difference: this task genuinely reached an outcome, so it's closed as
+      // 'completed' with that outcome intact — not 'cancelled' as superseded,
+      // which is what scheduleFollowUp does for a plain reschedule.
+      const scope = task.logistics_id ? 'logistics' : 'merchant'
+      const businessId = task.logistics_id || task.merchant_id
+      const current = await getCurrentSchedule(task.order_id)
+
+      const result = await scheduleFollowUp({
+        orderId: task.order_id,
+        newDate: followUpDate.toISOString(),
+        reason: `Previous outcome: ${outcomeNotes || 'No notes'}`,
+        actionType: outcome === 're_delivery_scheduled' ? 'Attempt Redelivery' : 'Call Customer',
+        assignedTo: task.assigned_to,
+        scope,
+        businessId,
+        actorId: profile?.id,
+        actorName: profile?.full_name,
+        taskTitle: `Follow-Up: ${task.title}`,
+        expectedSetAt: current?.next_follow_up_set_at || null,
+        priority: task.priority,
+        oldTaskId: taskId,
+        oldTaskDisposition: 'completed',
+        oldTaskOutcomeFields: {
+          outcome,
+          outcome_notes: outcomeNotes,
+          next_action: nextAction,
+          completed_by: completedBy,
+        },
+        // No interactive "keep/change" dialog exists inside this outcome modal —
+        // this is still a deliberate scheduling decision by the CS Rep, so an
+        // automatic single retry against a genuinely concurrent change is the
+        // right behavior rather than losing the outcome the user just submitted.
+        autoRetryOnConflict: true,
+      })
+
+      if (result?.error || result?.conflict) {
+        console.error('completeTaskWithOutcome: scheduleFollowUp did not complete, falling back to a direct outcome save so the CS Rep\'s work is not lost:', result)
+        await supabase.from('tasks').update(updates).eq('id', taskId)
+      }
+      return
+    }
+
+    // Standalone task with no order_id — no order-level pointer to manage,
+    // keep the original direct close-and-spawn behavior unchanged.
+    updates.status = 'completed'
     await supabase.from('tasks').insert({
       merchant_id: task.merchant_id || null,
       logistics_id: task.logistics_id || null,
-      order_id: task.order_id,
+      order_id: null,
       assigned_to: task.assigned_to,
       type: task.type,
       title: `Follow-Up: ${task.title}`,
