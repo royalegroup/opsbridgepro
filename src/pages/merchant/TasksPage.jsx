@@ -52,7 +52,7 @@ export default function TasksPage() {
   async function load() {
     const bid = profile.business_id
     let taskQuery = supabase.from('tasks')
-      .select('*, users!tasks_assigned_to_fkey(full_name), completed_user:users!tasks_completed_by_fkey(full_name), orders!tasks_order_id_fkey(id, delivery_state, customers(full_name, phone), order_items(product_id, quantity, products(name)))')
+      .select('*, users!tasks_assigned_to_fkey(full_name), completed_user:users!tasks_completed_by_fkey(full_name), orders!tasks_order_id_fkey(id, delivery_state, customers(full_name, phone), order_items(product_id, bundle_id, quantity, unit_selling_price, unit_cost_price, unit_delivery_fee, products(name)))')
       .eq('merchant_id', bid)
       .order('due_date', { ascending: true, nullsFirst: false })
     if (isScoped) taskQuery = taskQuery.eq('assigned_to', profile.id)
@@ -98,11 +98,21 @@ export default function TasksPage() {
     }).select().single()
 
     if (newOrder && items.length > 0) {
+      // Duplicate each original line's own snapshot (unit_selling_price/unit_cost_price/
+      // unit_delivery_fee/quantity) rather than recomputing anything from current product
+      // or bundle state — a reorder replays what was actually sold, not today's prices.
+      // product_id/bundle_id are copied as a pair directly from the original row, so
+      // whichever one was set there is the only one set here too — the XOR constraint
+      // is satisfied automatically, without re-deriving which type the line is.
       await supabase.from('order_items').insert(
         items.map(i => ({
-          order_id: newOrder.id, product_id: i.product_id, quantity: i.quantity,
-          unit_selling_price: i.products?.selling_price || 0, unit_cost_price: i.products?.cost_price || 0,
-          unit_delivery_fee: i.products?.delivery_fee || 0,
+          order_id: newOrder.id,
+          product_id: i.product_id || null,
+          bundle_id: i.bundle_id || null,
+          quantity: i.quantity,
+          unit_selling_price: i.unit_selling_price,
+          unit_cost_price: i.unit_cost_price,
+          unit_delivery_fee: i.unit_delivery_fee,
         }))
       )
     }

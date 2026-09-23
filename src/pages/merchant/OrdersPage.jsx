@@ -20,6 +20,7 @@ export default function OrdersPage() {
   const [orders, setOrders] = useState([])
   const [customers, setCustomers] = useState([])
   const [products, setProducts] = useState([])
+  const [bundles, setBundles] = useState([])
   const [csReps, setCsReps] = useState([])
   const [filter, setFilter] = useState('all')
   const [loading, setLoading] = useState(true)
@@ -29,7 +30,7 @@ export default function OrdersPage() {
   const [timelineOrderId, setTimelineOrderId] = useState(null)
   const [deleteConfirm, setDeleteConfirm] = useState(null)
   const [deleteError, setDeleteError] = useState('')
-  const [form, setForm] = useState({ customer_id: '', product_id: '', quantity: 1, delivery_state: '', source: 'manual', notes: '' })
+  const [form, setForm] = useState({ customer_id: '', product_id: '', bundle_id: '', quantity: 1, delivery_state: '', source: 'manual', notes: '' })
   const [saving, setSaving] = useState(false)
   const [exportOpen, setExportOpen] = useState(false)
   const [blockWarning, setBlockWarning] = useState(null)
@@ -53,24 +54,40 @@ export default function OrdersPage() {
     let customerQuery = supabase.from('customers').select('id, full_name, phone').eq('merchant_id', bid)
     if (isScoped) customerQuery = customerQuery.eq('created_by', profile.id)
 
-    const [ordersRes, cusRes, prodRes, repsRes] = await Promise.all([
+    const [ordersRes, cusRes, prodRes, repsRes, bundlesRes] = await Promise.all([
       orderQuery,
       customerQuery,
       supabase.from('products').select('id, name, selling_price, delivery_fee, cost_price').eq('merchant_id', bid).eq('is_active', true),
       supabase.from('users').select('id, full_name').eq('business_id', bid).eq('role', 'cs_rep'),
+      // Same bundle_items shape BundlesPage.jsx uses for its own cost calculation —
+      // reusing that exact structure/formula rather than a new one (see calcBundleCost below).
+      supabase.from('product_bundles')
+        .select('*, bundle_items(id, quantity, product_id, custom_name, custom_cost_price, cost_price_snapshot, selling_price_snapshot)')
+        .eq('merchant_id', bid).eq('is_active', true),
     ])
     if (ordersRes.data) setOrders(ordersRes.data)
     if (cusRes.data) setCustomers(cusRes.data)
     if (prodRes.data) setProducts(prodRes.data)
     if (repsRes.data) setCsReps(repsRes.data)
+    if (bundlesRes.data) setBundles(bundlesRes.data)
     setLoading(false)
+  }
+
+  // Identical formula to BundlesPage.jsx's own totalCost calculation (line ~170) —
+  // deliberately not reinvented. Custom items (product_id null) use custom_cost_price;
+  // product-linked items use their locked-in cost_price_snapshot, never the live product price.
+  function calcBundleCost(bundle) {
+    return (bundle.bundle_items || []).reduce((total, item) => {
+      const cost = item.product_id ? +item.cost_price_snapshot : +item.custom_cost_price
+      return total + (cost || 0) * item.quantity
+    }, 0)
   }
 
   const filtered = filter === 'all' ? orders : orders.filter(o => o.status === filter)
 
   function openNew() {
     setEditOrder(null)
-    setForm({ customer_id: '', product_id: '', quantity: 1, delivery_state: '', source: 'manual', notes: '' })
+    setForm({ customer_id: '', product_id: '', bundle_id: '', quantity: 1, delivery_state: '', source: 'manual', notes: '' })
     setBlockWarning(null)
     setOverrideBlock(false)
     setShowForm(true)
@@ -101,6 +118,7 @@ export default function OrdersPage() {
     setForm({
       customer_id: order.customer_id,
       product_id: item?.product_id || '',
+      bundle_id: item?.bundle_id || '',
       quantity: item?.quantity || 1,
       delivery_state: order.delivery_state || '',
       source: order.source || 'manual',
@@ -110,14 +128,48 @@ export default function OrdersPage() {
     setShowForm(true)
   }
 
+  // Single selector, single field of truth: a composite "product:<id>" or "bundle:<id>"
+  // value from the dropdown below. Setting one always clears the other, so product_id
+  // and bundle_id can never both be populated at once — matching the database's XOR
+  // constraint by construction, not by a runtime check.
+  function handleItemSelect(value) {
+    if (!value) { setForm(f => ({ ...f, product_id: '', bundle_id: '' })); return }
+    const [type, id] = value.split(':')
+    if (type === 'bundle') setForm(f => ({ ...f, bundle_id: id, product_id: '' }))
+    else setForm(f => ({ ...f, product_id: id, bundle_id: '' }))
+  }
+
   async function saveOrder() {
-    if (!form.customer_id || !form.product_id || !form.delivery_state) return
+    if (!form.customer_id || (!form.product_id && !form.bundle_id) || !form.delivery_state) return
     // Refuse to submit if the customer is blocklisted and not overridden by an authorized user
     if (blockWarning && !overrideBlock) return
     setSaving(true)
-    const product = products.find(p => p.id === form.product_id)
-    const total = product ? product.selling_price * form.quantity : 0
-    const fee = product ? product.delivery_fee : 0
+
+    // Exactly one of these is ever set — enforced by the selector itself (handleItemSelect
+    // always clears the other), matching the database's XOR constraint on order_items.
+    const product = form.product_id ? products.find(p => p.id === form.product_id) : null
+    const bundle = form.bundle_id ? bundles.find(b => b.id === form.bundle_id) : null
+
+    // Bundle pricing/cost comes entirely from the existing bundle architecture — its own
+    // fixed bundle_price/delivery_fee, and calcBundleCost() using the same snapshot formula
+    // BundlesPage.jsx already uses. Nothing new is calculated here.
+    const unitSellingPrice = product ? product.selling_price : bundle ? bundle.bundle_price : 0
+    const unitCostPrice = product ? product.cost_price : bundle ? calcBundleCost(bundle) : 0
+    const unitDeliveryFee = product ? product.delivery_fee : bundle ? bundle.delivery_fee : 0
+
+    const total = unitSellingPrice * form.quantity
+    // Existing product behavior is an unmultiplied, flat per-order fee — preserved exactly.
+    // Bundles multiply by quantity (bundle delivery fee × bundle quantity), per instruction.
+    const fee = product ? unitDeliveryFee : unitDeliveryFee * form.quantity
+
+    const itemPayload = {
+      product_id: product ? form.product_id : null,
+      bundle_id: bundle ? form.bundle_id : null,
+      quantity: form.quantity,
+      unit_selling_price: unitSellingPrice,
+      unit_cost_price: unitCostPrice,
+      unit_delivery_fee: unitDeliveryFee,
+    }
 
     if (editOrder) {
       // Update existing order + its item
@@ -131,14 +183,7 @@ export default function OrdersPage() {
       }).eq('id', editOrder.id)
 
       await supabase.from('order_items').delete().eq('order_id', editOrder.id)
-      await supabase.from('order_items').insert({
-        order_id: editOrder.id,
-        product_id: form.product_id,
-        quantity: form.quantity,
-        unit_selling_price: product.selling_price,
-        unit_cost_price: product.cost_price,
-        unit_delivery_fee: product.delivery_fee,
-      })
+      await supabase.from('order_items').insert({ order_id: editOrder.id, ...itemPayload })
 
       await logEvent({
         orderId: editOrder.id,
@@ -165,14 +210,7 @@ export default function OrdersPage() {
       }).select().single()
 
       if (!error && orderData) {
-        await supabase.from('order_items').insert({
-          order_id: orderData.id,
-          product_id: form.product_id,
-          quantity: form.quantity,
-          unit_selling_price: product.selling_price,
-          unit_cost_price: product.cost_price,
-          unit_delivery_fee: product.delivery_fee,
-        })
+        await supabase.from('order_items').insert({ order_id: orderData.id, ...itemPayload })
 
         const customerName = customers.find(c => c.id === form.customer_id)?.full_name || 'customer'
         await logEvent({
@@ -184,7 +222,7 @@ export default function OrdersPage() {
         })
 
         setShowForm(false)
-        setForm({ customer_id: '', product_id: '', quantity: 1, delivery_state: '', source: 'manual', notes: '' })
+        setForm({ customer_id: '', product_id: '', bundle_id: '', quantity: 1, delivery_state: '', source: 'manual', notes: '' })
         loadAll()
       }
     }
@@ -437,10 +475,17 @@ export default function OrdersPage() {
                 </div>
               )}
               <div>
-                <label className="label">Product</label>
-                <select className="input" value={form.product_id} onChange={e => setForm(f => ({ ...f, product_id: e.target.value }))}>
-                  <option value="">Select product</option>
-                  {products.map(p => <option key={p.id} value={p.id}>{p.name} — ₦{Number(p.selling_price).toLocaleString()}</option>)}
+                <label className="label">Product or Bundle</label>
+                <select className="input"
+                  value={form.bundle_id ? `bundle:${form.bundle_id}` : form.product_id ? `product:${form.product_id}` : ''}
+                  onChange={e => handleItemSelect(e.target.value)}>
+                  <option value="">Select product or bundle</option>
+                  <optgroup label="Products">
+                    {products.map(p => <option key={p.id} value={`product:${p.id}`}>{p.name} — ₦{Number(p.selling_price).toLocaleString()}</option>)}
+                  </optgroup>
+                  <optgroup label="📦 Bundles">
+                    {bundles.map(b => <option key={b.id} value={`bundle:${b.id}`}>📦 {b.name} — ₦{Number(b.bundle_price).toLocaleString()}</option>)}
+                  </optgroup>
                 </select>
               </div>
               <div>

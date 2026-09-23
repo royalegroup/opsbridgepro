@@ -1,6 +1,6 @@
 # OpsBridge Pro — Development Progress & Handoff
 
-**Last updated:** B3 (Tasks scheduling/reminder extension) is now fully ✅ complete — all five reschedule surfaces (Royale Requests, Agent view, GlowMedals Orders, Royale Follow-ups, and TasksPage.jsx's outcome flow) run through the shared, conflict-protected `scheduleFollowUp()` system. See Section 6, B3.
+**Last updated:** Bundle Order Support — Step 2 of 9 complete (`TasksPage.jsx`'s Ready-to-Reorder flow is now bundle-aware). Steps 3–9 pending review before proceeding. See Section 6, C.
 **Purpose:** Any Claude session (or developer) should be able to read this file and resume work immediately without re-analyzing the codebase or re-asking the user for context already established.
 
 ---
@@ -194,6 +194,34 @@ Built `notificationHelpers.js` (`notify()` — fire-and-forget like `logEvent`; 
 - True scheduled/proactive reminders (needs Supabase Edge Functions + cron — later phase).
 
 **Files touched across this whole B3 fix (final state, all deployed):** `src/lib/schedulingHelpers.js` (new — now also owns `createMerchantTask`/`createLogisticsTask`), `src/components/shared/ScheduleFollowUpModal.jsx` (new), `src/lib/taskHelpers.js`, `src/pages/logistics/RequestsPage.jsx`, `src/pages/logistics/AgentView.jsx`, `src/pages/merchant/OrdersPage.jsx`, `src/pages/logistics/RoyaleTasksPage.jsx`. `src/pages/merchant/TasksPage.jsx` was inspected twice and confirmed to need **no changes** at any point in this fix.
+
+### 🚧 C. Bundle Order Support — IN PROGRESS (Step 2 of 9 complete)
+
+A full impact audit (repository-verified, not assumption-based) found `order_items.product_id` was `NOT NULL` with no `bundle_id` column — bundles could not be represented in an order at any level, schema or UI. Approved fix: `order_items.product_id` made nullable, `bundle_id` added (FK → `product_bundles`, `ON DELETE RESTRICT`), XOR `CHECK` constraint (`order_items_product_or_bundle_check`), plus a partial index on `bundle_id` — all run and confirmed in Supabase.
+
+**✅ Step 1 complete — `OrdersPage.jsx` is now bundle-aware (order creation/editing only):**
+- `loadAll()` now also fetches active `product_bundles` (with `bundle_items`, same shape `BundlesPage.jsx` uses)
+- The single Product field is now one "Product or Bundle" dropdown with grouped options (`optgroup`), backed by a composite `product:<id>`/`bundle:<id>` value — selecting one always clears the other via `handleItemSelect()`, so `form.product_id`/`form.bundle_id` can never both be set (matches the DB's XOR constraint by construction)
+- New `calcBundleCost()` reuses `BundlesPage.jsx`'s exact cost formula (`cost_price_snapshot` for product-linked items, `custom_cost_price` for custom items, summed × quantity) — no new costing model
+- Both create and edit paths now build one shared `itemPayload` (either branch used to duplicate the insert fields inline) — for a bundle: `unit_selling_price = bundle_price`, `unit_cost_price = calcBundleCost(bundle)`, `unit_delivery_fee = bundle.delivery_fee`, order-level `total_amount`/`total_delivery_fee` both × quantity (bundle delivery fee multiplies by quantity — a deliberate difference from the existing flat, unmultiplied product delivery fee, which is preserved exactly as before)
+- Order line quantity represents bundles ordered, not expanded into component rows — `order_items` stays one row per line either way
+- Verified: `npm run build` clean (0 errors), `npm run lint` shows zero new issues (the one warning on this file is pre-existing and identical to the same warning on nearly every other page in the repo)
+- Confirmed via `git status`/`git diff --stat`: only `OrdersPage.jsx` was touched
+
+**Remaining steps (approved sequence, not started):** 3. `stockHelpers.js` bundle stock deduction · 4. Receipts (`ReceiptModal.jsx`/`receiptHelpers.js`) · 5. Reports (`ReportsPage.jsx` top-product) · 6. COGS/Finance verification-only pass · 7. CSV (expected no-op) · 8. Testing · 9. Docs.
+
+**✅ Step 2 complete — `TasksPage.jsx`'s "Ready to Reorder" flow is now bundle-aware:**
+- `load()`'s query extended minimally: `order_items(...)` now also selects `bundle_id`, `unit_selling_price`, `unit_cost_price`, `unit_delivery_fee` (previously only `product_id, quantity, products(name)`)
+- `handleReorder()`'s duplication now copies `product_id`/`bundle_id` as a pair directly from the original row (whichever was set stays the only one set — the XOR constraint is satisfied automatically, not re-derived) and copies `unit_selling_price`/`unit_cost_price`/`unit_delivery_fee`/`quantity` **directly from the original order item's own snapshot** — no recomputation from current product or bundle state, so an old bundle whose price/cost has since changed is not silently repriced on reorder
+- The pre-existing `totalAmount`/`totalFee` = ₦0 calculation (still reading `i.products?.selling_price`, which was never fetched) was deliberately left untouched — confirmed it does not behave any differently for a bundle-sourced reorder than it already does for a product-sourced one (both silently evaluate to 0 via optional chaining, no crash either way), so bundle-awareness here does not make this pre-existing issue any worse
+- Verified: `npm run build` clean (0 errors); `npm run lint` shows one pre-existing error on this file (`'count' is not used`, line 194) confirmed unrelated to this change (nowhere near either edited section) and one pre-existing warning shared with nearly every other page in the repo — zero new lint issues
+- Confirmed via `git diff --stat`: only `TasksPage.jsx` changed in this step (18 lines)
+
+**Known cosmetic gap, not fixed here (same category as Receipts/Reports, deferred to Steps 4–5):** two display spots inside `TasksPage.jsx` itself (`task.orders.order_items.map(i => i.products?.name...)` in the task list summary, and the reorder-confirmation preview) still show blank/`undefined` for a bundle-sourced line, since neither embeds `product_bundles(name)`. Data correctness is unaffected — this is display-only, and left alone per the strict scope of this step.
+
+**⚠️ Pre-existing issues found during the audit — explicitly NOT fixed, documented here per instruction:**
+- `awardOrderCommission()` (called from both `RequestsPage.jsx` and `AgentView.jsx`) is passed `order: { id, total_amount }` only — `order_items` is never included, so any `percent_profit` commission rule computes cost as ₦0 today, for every order, bundle or not.
+- `TasksPage.jsx`'s "Ready to Reorder" flow (`handleReorder()`) still fetches only `products(name)`, no price fields, so a reorder's `total_amount`/`total_delivery_fee` remain ₦0 today, for every reorder, bundle or not. Step 2 touched this file to fix the item-level `product_id`/`bundle_id`/snapshot duplication (required for Bundle compatibility) but deliberately left this total-calculation bug itself alone — confirmed it behaves identically (still silently ₦0, no crash) for both product and bundle reorders, so Bundle work did not make it worse, only left it exactly as found.
 
 ---
 
