@@ -1,6 +1,6 @@
 # OpsBridge Pro — Development Progress & Handoff
 
-**Last updated:** Bundle Order Support — Step 3 of 9 complete (`stockHelpers.js` delivery deduction is now bundle-aware). Steps 4–9 pending review before proceeding. See Section 6, C.
+**Last updated:** Bundle Order Support — Step 4 (COGS/Finance) verified, zero code changes needed. Receipts, Reports, CSV, Testing, Docs remain. See Section 6, C.
 **Purpose:** Any Claude session (or developer) should be able to read this file and resume work immediately without re-analyzing the codebase or re-asking the user for context already established.
 
 ---
@@ -195,7 +195,7 @@ Built `notificationHelpers.js` (`notify()` — fire-and-forget like `logEvent`; 
 
 **Files touched across this whole B3 fix (final state, all deployed):** `src/lib/schedulingHelpers.js` (new — now also owns `createMerchantTask`/`createLogisticsTask`), `src/components/shared/ScheduleFollowUpModal.jsx` (new), `src/lib/taskHelpers.js`, `src/pages/logistics/RequestsPage.jsx`, `src/pages/logistics/AgentView.jsx`, `src/pages/merchant/OrdersPage.jsx`, `src/pages/logistics/RoyaleTasksPage.jsx`. `src/pages/merchant/TasksPage.jsx` was inspected twice and confirmed to need **no changes** at any point in this fix.
 
-### 🚧 C. Bundle Order Support — IN PROGRESS (Step 3 of 9 complete)
+### 🚧 C. Bundle Order Support — IN PROGRESS (4 of \~9 stages complete: schema, Orders, Reorder, Stock, COGS-verify)
 
 A full impact audit (repository-verified, not assumption-based) found `order_items.product_id` was `NOT NULL` with no `bundle_id` column — bundles could not be represented in an order at any level, schema or UI. Approved fix: `order_items.product_id` made nullable, `bundle_id` added (FK → `product_bundles`, `ON DELETE RESTRICT`), XOR `CHECK` constraint (`order_items_product_or_bundle_check`), plus a partial index on `bundle_id` — all run and confirmed in Supabase.
 
@@ -208,7 +208,7 @@ A full impact audit (repository-verified, not assumption-based) found `order_ite
 - Verified: `npm run build` clean (0 errors), `npm run lint` shows zero new issues (the one warning on this file is pre-existing and identical to the same warning on nearly every other page in the repo)
 - Confirmed via `git status`/`git diff --stat`: only `OrdersPage.jsx` was touched
 
-**Remaining steps (approved sequence, not started):** 4. Receipts (`ReceiptModal.jsx`/`receiptHelpers.js`) · 5. Reports (`ReportsPage.jsx` top-product) · 6. COGS/Finance verification-only pass · 7. CSV (expected no-op) · 8. Testing · 9. Docs.
+**Remaining steps (approved sequence — user has reordered slightly from the original 9-item list; following their live numbering):** Receipts (`ReceiptModal.jsx`/`receiptHelpers.js`) · Reports (`ReportsPage.jsx` top-product) · CSV (expected no-op) · Testing · Docs.
 
 **✅ Step 2 complete — `TasksPage.jsx`'s "Ready to Reorder" flow is now bundle-aware:**
 - `load()`'s query extended minimally: `order_items(...)` now also selects `bundle_id`, `unit_selling_price`, `unit_cost_price`, `unit_delivery_fee` (previously only `product_id, quantity, products(name)`)
@@ -229,6 +229,13 @@ A full impact audit (repository-verified, not assumption-based) found `order_ite
 - Confirmed via `git diff --stat`: only `stockHelpers.js` changed (59 lines)
 
 **⚠️ Important finding from Test 6 (duplicate delivery) — a third pre-existing gap, not introduced by this step, not fixed:** `deductAgentStockOnDelivery()` itself has **no idempotency guard at all** — it deducts unconditionally whenever called, with no check of whether this order was already delivered. The only thing preventing a double-click from double-deducting is a UI conditional render (`{r.status === 'out_for_delivery' && <button>}` in both `RequestsPage.jsx` and `AgentView.jsx`), and that only updates *after* `load()` runs at the very end of the calling function — once stock deduction, commission awarding (×2), COD record creation, and notifications have already all executed. There is no `disabled` state on the button, no status re-check inside the handler itself. **This affects product orders exactly as much as bundle orders — bundles do not make it any worse, and this step did not touch `RequestsPage.jsx`/`AgentView.jsx`, so nothing about this was weakened either.** Documented here per instruction; not fixed, as fixing it would mean touching the delivery-completion flow itself, out of scope for Bundle work.
+
+**✅ Step 4 complete — Bundle COGS/Finance behavior VERIFIED, zero code changes required:**
+- Full repo search confirmed every COGS/profit calculation site (`financeRollupHelpers.js` ×2, `FinancePage.jsx`'s own all-time total, `ReportsPage.jsx`, `rewardsHelpers.js`, `marketingHelpers.js`) uses the identical generic formula `unit_cost_price × quantity` (or `(unit_selling_price − unit_cost_price) × quantity`), with no reference anywhere to `product_id`/`bundle_id`/`products`/`product_bundles` — bundles fit this architecture automatically because Step 1 already snapshots these fields correctly
+- Verified with concrete arithmetic (₦20,000 bundle, ₦7,000 component cost, ×3 ordered): COGS ₦21,000, revenue ₦60,000, gross profit ₦39,000 — computed directly, matches expected exactly, two independently-written formulas agree
+- Confirmed delivery fee and COGS are structurally isolated (different fields, different reduce operations) — no possible cross-contamination
+- Re-confirmed (read-only) `TasksPage.jsx`'s reorder flow copies snapshots directly with no path back to live bundle data — a bundle's historical `unit_cost_price` cannot be altered by a later change to that bundle's current cost/composition
+- **No defects found. No files changed this step.** Build re-run on the untouched repo as a sanity check: clean, 0 errors.
 
 **⚠️ Pre-existing issues found during the audit — explicitly NOT fixed, documented here per instruction:**
 - `awardOrderCommission()` (called from both `RequestsPage.jsx` and `AgentView.jsx`) is passed `order: { id, total_amount }` only — `order_items` is never included, so any `percent_profit` commission rule computes cost as ₦0 today, for every order, bundle or not.
