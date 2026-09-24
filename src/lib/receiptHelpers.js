@@ -100,7 +100,7 @@ export function generatePDFReceipt({ order, business, receipt, items }) {
 
   if (items && items.length > 0) {
     items.forEach(item => {
-      const name = item.products?.name || 'Product'
+      const name = item.products?.name || item.product_bundles?.name || 'Product'
       const qty = item.quantity || 1
       const unitPrice = item.unit_selling_price || 0
       const total = qty * unitPrice
@@ -206,7 +206,7 @@ export function generateWhatsAppReceipt({ order, business, receipt, items }) {
   })
 
   const itemLines = items && items.length > 0
-    ? items.map(i => `  • ${i.products?.name} x${i.quantity} — N${Number(i.unit_selling_price * i.quantity).toLocaleString()}`).join('\n')
+    ? items.map(i => `  • ${i.products?.name || i.product_bundles?.name || 'Product'} x${i.quantity} — N${Number(i.unit_selling_price * i.quantity).toLocaleString()}`).join('\n')
     : `  • Order — N${Number(order.total_amount).toLocaleString()}`
 
   return `*${business?.name || 'OpsBridge Pro'} — Official Receipt*

@@ -22,10 +22,13 @@ export default function ReceiptModal({ order, business, onClose }) {
   async function loadReceiptData() {
     setLoading(true)
 
-    // Load order items
+    // Load order items. product_id/bundle_id are two separate relationships to two
+    // different tables (products / product_bundles) — no ambiguity between them, unlike
+    // the earlier tasks<->orders case where two relationships pointed at the SAME pair
+    // of tables. Safe to embed both without an explicit relationship hint.
     const { data: itemData } = await supabase
       .from('order_items')
-      .select('*, products(name, selling_price)')
+      .select('*, products(name, selling_price), product_bundles(name)')
       .eq('order_id', order.id)
     if (itemData) setItems(itemData)
 
@@ -141,7 +144,7 @@ export default function ReceiptModal({ order, business, onClose }) {
                 <div className="border-t border-surface-200 pt-1.5 mt-1.5">
                   {items.length > 0 ? items.map(i => (
                     <div key={i.id} className="flex justify-between text-xs">
-                      <span className="text-ink-600">{i.products?.name} x{i.quantity}</span>
+                      <span className="text-ink-600">{i.products?.name || i.product_bundles?.name || 'Product'} x{i.quantity}</span>
                       <span className="font-medium text-ink-900">₦{Number(i.unit_selling_price * i.quantity).toLocaleString()}</span>
                     </div>
                   )) : (

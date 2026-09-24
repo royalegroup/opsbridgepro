@@ -1,6 +1,6 @@
 # OpsBridge Pro — Development Progress & Handoff
 
-**Last updated:** Bundle Order Support — Step 4 (COGS/Finance) verified, zero code changes needed. Receipts, Reports, CSV, Testing, Docs remain. See Section 6, C.
+**Last updated:** Bundle Order Support — Step 5 (Receipts) complete. COGS/Finance verified (Step 4, no changes needed). Reports, CSV, Testing, Docs remain. See Section 6, C.
 **Purpose:** Any Claude session (or developer) should be able to read this file and resume work immediately without re-analyzing the codebase or re-asking the user for context already established.
 
 ---
@@ -195,7 +195,7 @@ Built `notificationHelpers.js` (`notify()` — fire-and-forget like `logEvent`; 
 
 **Files touched across this whole B3 fix (final state, all deployed):** `src/lib/schedulingHelpers.js` (new — now also owns `createMerchantTask`/`createLogisticsTask`), `src/components/shared/ScheduleFollowUpModal.jsx` (new), `src/lib/taskHelpers.js`, `src/pages/logistics/RequestsPage.jsx`, `src/pages/logistics/AgentView.jsx`, `src/pages/merchant/OrdersPage.jsx`, `src/pages/logistics/RoyaleTasksPage.jsx`. `src/pages/merchant/TasksPage.jsx` was inspected twice and confirmed to need **no changes** at any point in this fix.
 
-### 🚧 C. Bundle Order Support — IN PROGRESS (4 of \~9 stages complete: schema, Orders, Reorder, Stock, COGS-verify)
+### 🚧 C. Bundle Order Support — IN PROGRESS (schema, Orders, Reorder, Stock, COGS-verify, Receipts all complete)
 
 A full impact audit (repository-verified, not assumption-based) found `order_items.product_id` was `NOT NULL` with no `bundle_id` column — bundles could not be represented in an order at any level, schema or UI. Approved fix: `order_items.product_id` made nullable, `bundle_id` added (FK → `product_bundles`, `ON DELETE RESTRICT`), XOR `CHECK` constraint (`order_items_product_or_bundle_check`), plus a partial index on `bundle_id` — all run and confirmed in Supabase.
 
@@ -208,7 +208,7 @@ A full impact audit (repository-verified, not assumption-based) found `order_ite
 - Verified: `npm run build` clean (0 errors), `npm run lint` shows zero new issues (the one warning on this file is pre-existing and identical to the same warning on nearly every other page in the repo)
 - Confirmed via `git status`/`git diff --stat`: only `OrdersPage.jsx` was touched
 
-**Remaining steps (approved sequence — user has reordered slightly from the original 9-item list; following their live numbering):** Receipts (`ReceiptModal.jsx`/`receiptHelpers.js`) · Reports (`ReportsPage.jsx` top-product) · CSV (expected no-op) · Testing · Docs.
+**Remaining steps (approved sequence — renumbered slightly per your live sequencing):** Reports (`ReportsPage.jsx` top-product) · CSV (expected no-op) · Testing · Docs.
 
 **✅ Step 2 complete — `TasksPage.jsx`'s "Ready to Reorder" flow is now bundle-aware:**
 - `load()`'s query extended minimally: `order_items(...)` now also selects `bundle_id`, `unit_selling_price`, `unit_cost_price`, `unit_delivery_fee` (previously only `product_id, quantity, products(name)`)
@@ -235,7 +235,19 @@ A full impact audit (repository-verified, not assumption-based) found `order_ite
 - Verified with concrete arithmetic (₦20,000 bundle, ₦7,000 component cost, ×3 ordered): COGS ₦21,000, revenue ₦60,000, gross profit ₦39,000 — computed directly, matches expected exactly, two independently-written formulas agree
 - Confirmed delivery fee and COGS are structurally isolated (different fields, different reduce operations) — no possible cross-contamination
 - Re-confirmed (read-only) `TasksPage.jsx`'s reorder flow copies snapshots directly with no path back to live bundle data — a bundle's historical `unit_cost_price` cannot be altered by a later change to that bundle's current cost/composition
-- **No defects found. No files changed this step.** Build re-run on the untouched repo as a sanity check: clean, 0 errors.
+- No defects found. No files changed. Build re-run on the untouched repo as a sanity check: clean, 0 errors.
+
+**✅ Step 5 complete — Bundle-aware receipts (`ReceiptModal.jsx` + `receiptHelpers.js`):**
+- Exhaustive repo search confirmed these two files are the *only* customer-receipt generators — ruled out unrelated false positives ("receipt" also appears in stock-receiving terminology, "WhatsApp" also appears as an unrelated click-to-chat button and an ad-platform label)
+- `ReceiptModal.jsx`'s item query now also embeds `product_bundles(name)` alongside the existing `products(name, selling_price)` — confirmed safe without an explicit relationship hint, since `order_items→products` and `order_items→bundle_id→product_bundles` are two separate relationships to two different tables, not the same "two FKs to one table" ambiguity that caused the earlier `PGRST201` bug
+- Name resolution updated to `item.products?.name || item.product_bundles?.name || 'Product'` in three places: the receipt modal preview, the PDF generator, and the WhatsApp text generator — the last of these previously had **no fallback at all** (an unresolved reference would literally print the word "undefined" into the customer-facing message); this is now fixed as a direct, in-scope consequence of applying the same correct fallback chain everywhere, not a separate initiative
+- Historical snapshot values (`unit_selling_price`, `quantity`, totals) are untouched — receipts read them directly from the order item exactly as before; bundle name resolution is the only change, price/cost calculation was not touched
+- Traced all 7 required test scenarios at the code level: normal product, bundle, bundle-after-price-change (structurally guaranteed correct — name resolution and price are resolved independently, and price was already snapshotted per Steps 1/2/4), mixed order, PDF, WhatsApp, and missing/orphaned reference (falls back to `'Product'`, never crashes)
+- Verified: `node --check` passes; `npm run build` clean (0 errors); lint shows two errors, both confirmed **byte-for-byte pre-existing** by diffing against the untouched original files before any edit — zero new issues introduced
+
+**⚠️ Two pre-existing issues found while reading these files closely — NOT fixed, unrelated to bundles:**
+- `receiptHelpers.js`'s PDF generator computes a `deliveryFee` variable from `order.total_delivery_fee` but **never uses it** — the PDF unconditionally prints the literal text "FREE" for every order's delivery fee line, regardless of the actual amount. Confirmed independently by ESLint (`'deliveryFee' is assigned a value but never used`) in the untouched original file. Affects every order, product or bundle.
+- `ReceiptModal.jsx` has a pre-existing ESLint error (`loadReceiptData` used before declaration in a `useEffect` — harmless in practice since function declarations hoist, but flagged by the linter) — confirmed present in the untouched original file, unrelated to this change.
 
 **⚠️ Pre-existing issues found during the audit — explicitly NOT fixed, documented here per instruction:**
 - `awardOrderCommission()` (called from both `RequestsPage.jsx` and `AgentView.jsx`) is passed `order: { id, total_amount }` only — `order_items` is never included, so any `percent_profit` commission rule computes cost as ₦0 today, for every order, bundle or not.
