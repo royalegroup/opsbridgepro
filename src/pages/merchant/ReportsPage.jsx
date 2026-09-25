@@ -22,7 +22,10 @@ export default function ReportsPage() {
     const bid = profile.business_id
     const [oRes, lrRes] = await Promise.all([
       supabase.from('orders')
-        .select('id, status, total_amount, delivery_state, source, created_at, customer_id, order_items(quantity, unit_cost_price, unit_selling_price, products(name))')
+        // product_id/bundle_id are separate relationships to separate tables (products /
+        // product_bundles) — no ambiguity between them, same pattern already proven safe
+        // in Step 5's identical ReceiptModal.jsx query.
+        .select('id, status, total_amount, delivery_state, source, created_at, customer_id, order_items(quantity, unit_cost_price, unit_selling_price, products(name), product_bundles(name))')
         .eq('merchant_id', bid),
       // logistics_requests carries merchant_id even though it lives on Royale's side —
       // this is the timing data we CAN see without crossing into Royale's internal tables
@@ -57,7 +60,7 @@ export default function ReportsPage() {
     // Top product for this state
     const productCounts = {}
     stateOrders.forEach(o => (o.order_items || []).forEach(i => {
-      const name = i.products?.name || 'Unknown'
+      const name = i.products?.name || i.product_bundles?.name || 'Unknown'
       productCounts[name] = (productCounts[name] || 0) + i.quantity
     }))
     const topProduct = Object.entries(productCounts).sort((a, b) => b[1] - a[1])[0]?.[0] || '—'

@@ -1,6 +1,6 @@
 # OpsBridge Pro — Development Progress & Handoff
 
-**Last updated:** Bundle Order Support — Step 5 (Receipts) complete. COGS/Finance verified (Step 4, no changes needed). Reports, CSV, Testing, Docs remain. See Section 6, C.
+**Last updated:** Bundle Order Support — Step 6 (Reports) complete. CSV, Testing, final Docs pass remain. See Section 6, C.
 **Purpose:** Any Claude session (or developer) should be able to read this file and resume work immediately without re-analyzing the codebase or re-asking the user for context already established.
 
 ---
@@ -195,7 +195,7 @@ Built `notificationHelpers.js` (`notify()` — fire-and-forget like `logEvent`; 
 
 **Files touched across this whole B3 fix (final state, all deployed):** `src/lib/schedulingHelpers.js` (new — now also owns `createMerchantTask`/`createLogisticsTask`), `src/components/shared/ScheduleFollowUpModal.jsx` (new), `src/lib/taskHelpers.js`, `src/pages/logistics/RequestsPage.jsx`, `src/pages/logistics/AgentView.jsx`, `src/pages/merchant/OrdersPage.jsx`, `src/pages/logistics/RoyaleTasksPage.jsx`. `src/pages/merchant/TasksPage.jsx` was inspected twice and confirmed to need **no changes** at any point in this fix.
 
-### 🚧 C. Bundle Order Support — IN PROGRESS (schema, Orders, Reorder, Stock, COGS-verify, Receipts all complete)
+### 🚧 C. Bundle Order Support — IN PROGRESS (schema, Orders, Reorder, Stock, COGS-verify, Receipts, Reports all complete)
 
 A full impact audit (repository-verified, not assumption-based) found `order_items.product_id` was `NOT NULL` with no `bundle_id` column — bundles could not be represented in an order at any level, schema or UI. Approved fix: `order_items.product_id` made nullable, `bundle_id` added (FK → `product_bundles`, `ON DELETE RESTRICT`), XOR `CHECK` constraint (`order_items_product_or_bundle_check`), plus a partial index on `bundle_id` — all run and confirmed in Supabase.
 
@@ -208,7 +208,7 @@ A full impact audit (repository-verified, not assumption-based) found `order_ite
 - Verified: `npm run build` clean (0 errors), `npm run lint` shows zero new issues (the one warning on this file is pre-existing and identical to the same warning on nearly every other page in the repo)
 - Confirmed via `git status`/`git diff --stat`: only `OrdersPage.jsx` was touched
 
-**Remaining steps (approved sequence — renumbered slightly per your live sequencing):** Reports (`ReportsPage.jsx` top-product) · CSV (expected no-op) · Testing · Docs.
+**Remaining steps (approved sequence — renumbered slightly per your live sequencing):** CSV (expected no-op) · Testing · Docs.
 
 **✅ Step 2 complete — `TasksPage.jsx`'s "Ready to Reorder" flow is now bundle-aware:**
 - `load()`'s query extended minimally: `order_items(...)` now also selects `bundle_id`, `unit_selling_price`, `unit_cost_price`, `unit_delivery_fee` (previously only `product_id, quantity, products(name)`)
@@ -248,6 +248,18 @@ A full impact audit (repository-verified, not assumption-based) found `order_ite
 **⚠️ Two pre-existing issues found while reading these files closely — NOT fixed, unrelated to bundles:**
 - `receiptHelpers.js`'s PDF generator computes a `deliveryFee` variable from `order.total_delivery_fee` but **never uses it** — the PDF unconditionally prints the literal text "FREE" for every order's delivery fee line, regardless of the actual amount. Confirmed independently by ESLint (`'deliveryFee' is assigned a value but never used`) in the untouched original file. Affects every order, product or bundle.
 - `ReceiptModal.jsx` has a pre-existing ESLint error (`loadReceiptData` used before declaration in a `useEffect` — harmless in practice since function declarations hoist, but flagged by the linter) — confirmed present in the untouched original file, unrelated to this change.
+
+**✅ Step 6 complete — Bundle-aware Reports (`ReportsPage.jsx` Top Product):**
+- Exhaustive repo-wide investigation performed per the required checklist (`products?.name`, `'Unknown'`, `'Product'`, `order_items`, `bundle_id`, dashboards, analytics, charts) before any edit — ruled out 9 files as false positives or genuinely unaffected: `AgentsPage.jsx`/`StockManagementPage.jsx`/`StockPage.jsx`/`BundlesPage.jsx` (all stock/inventory displays of real products only, never bundles), `RoyaleRewardsPage.jsx`/`BlockedCustomersPage.jsx`/`RewardsPage.jsx` (`'Unknown'` fallbacks for a *staff name*, unrelated), `FinancePage.jsx` (fetches `products(name)` but confirmed never rendered anywhere), and `LogisticsReportsPage.jsx` (Royale's own Reports page — queries only `logistics_requests`, no `order_items`/product reference at all)
+- Confirmed exactly **one** genuine site existed: `ReportsPage.jsx` line 60, the per-state "Top Product" breakdown
+- Query extended to also embed `product_bundles(name)`; name resolution now `i.products?.name || i.product_bundles?.name || 'Unknown'`
+- `grossProfit`/COGS calculation on the same page (already verified correct in Step 4) was **not touched at all** — confirmed by the diff: exactly two lines changed, both display-only
+- Verified: `npm run build` clean (0 errors); the two lint errors shown are confirmed **byte-for-byte pre-existing** (one on this file, one on the unrelated `LogisticsReportsPage.jsx`) by diffing against a freshly-cloned, untouched copy of the same commit
+- Traced all 6 required test scenarios at the code level: product report unchanged, bundle report resolves correctly, mixed order keeps both entries independent (no crossover), historical bundle pricing untouched by this change, missing/orphaned reference falls back to `'Unknown'` without crashing, and existing finance/profit calculations on this same page confirmed untouched
+
+**⚠️ Design decision flagged, not implemented — for your consideration, not a defect:** "Top Product" currently counts raw `order_items.quantity` per resolved name — for a bundle line that's "bundles sold," a different unit than "product units sold" for a plain product line, yet both now compete in the same ranking once bundles get a name instead of "Unknown." The instructions explicitly sanctioned a naming-only fallback as the correct minimal fix without redefining the report's meaning, which is what was implemented. Whether "Top Product" should eventually split into separate Product/Bundle rankings is a genuine design question, not something decided or implemented here.
+
+**Marketing attribution — confirmed out of scope, not touched:** `marketingHelpers.js`/`MarketingPage.jsx` is a separate page from Reports (Marketing Dashboard vs. the Reports page), not part of the display being changed in this step. The previously-documented campaign-attribution edge case (a bundle containing a campaign's target product isn't currently attributed to that campaign) remains deferred, unchanged.
 
 **⚠️ Pre-existing issues found during the audit — explicitly NOT fixed, documented here per instruction:**
 - `awardOrderCommission()` (called from both `RequestsPage.jsx` and `AgentView.jsx`) is passed `order: { id, total_amount }` only — `order_items` is never included, so any `percent_profit` commission rule computes cost as ₦0 today, for every order, bundle or not.
