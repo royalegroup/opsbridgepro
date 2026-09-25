@@ -1,6 +1,6 @@
 # OpsBridge Pro — Development Progress & Handoff
 
-**Last updated:** Bundle Order Support — Step 6 (Reports) complete. CSV, Testing, final Docs pass remain. See Section 6, C.
+**Last updated:** Bundle Order Support — Step 7 (CSV) verified, zero code changes needed. Testing and final Docs pass remain. See Section 6, C.
 **Purpose:** Any Claude session (or developer) should be able to read this file and resume work immediately without re-analyzing the codebase or re-asking the user for context already established.
 
 ---
@@ -195,7 +195,7 @@ Built `notificationHelpers.js` (`notify()` — fire-and-forget like `logEvent`; 
 
 **Files touched across this whole B3 fix (final state, all deployed):** `src/lib/schedulingHelpers.js` (new — now also owns `createMerchantTask`/`createLogisticsTask`), `src/components/shared/ScheduleFollowUpModal.jsx` (new), `src/lib/taskHelpers.js`, `src/pages/logistics/RequestsPage.jsx`, `src/pages/logistics/AgentView.jsx`, `src/pages/merchant/OrdersPage.jsx`, `src/pages/logistics/RoyaleTasksPage.jsx`. `src/pages/merchant/TasksPage.jsx` was inspected twice and confirmed to need **no changes** at any point in this fix.
 
-### 🚧 C. Bundle Order Support — IN PROGRESS (schema, Orders, Reorder, Stock, COGS-verify, Receipts, Reports all complete)
+### 🚧 C. Bundle Order Support — IN PROGRESS (schema, Orders, Reorder, Stock, COGS-verify, Receipts, Reports, CSV-verify all complete)
 
 A full impact audit (repository-verified, not assumption-based) found `order_items.product_id` was `NOT NULL` with no `bundle_id` column — bundles could not be represented in an order at any level, schema or UI. Approved fix: `order_items.product_id` made nullable, `bundle_id` added (FK → `product_bundles`, `ON DELETE RESTRICT`), XOR `CHECK` constraint (`order_items_product_or_bundle_check`), plus a partial index on `bundle_id` — all run and confirmed in Supabase.
 
@@ -208,7 +208,7 @@ A full impact audit (repository-verified, not assumption-based) found `order_ite
 - Verified: `npm run build` clean (0 errors), `npm run lint` shows zero new issues (the one warning on this file is pre-existing and identical to the same warning on nearly every other page in the repo)
 - Confirmed via `git status`/`git diff --stat`: only `OrdersPage.jsx` was touched
 
-**Remaining steps (approved sequence — renumbered slightly per your live sequencing):** CSV (expected no-op) · Testing · Docs.
+**Remaining steps (approved sequence — renumbered slightly per your live sequencing):** Testing · Docs.
 
 **✅ Step 2 complete — `TasksPage.jsx`'s "Ready to Reorder" flow is now bundle-aware:**
 - `load()`'s query extended minimally: `order_items(...)` now also selects `bundle_id`, `unit_selling_price`, `unit_cost_price`, `unit_delivery_fee` (previously only `product_id, quantity, products(name)`)
@@ -260,6 +260,13 @@ A full impact audit (repository-verified, not assumption-based) found `order_ite
 **⚠️ Design decision flagged, not implemented — for your consideration, not a defect:** "Top Product" currently counts raw `order_items.quantity` per resolved name — for a bundle line that's "bundles sold," a different unit than "product units sold" for a plain product line, yet both now compete in the same ranking once bundles get a name instead of "Unknown." The instructions explicitly sanctioned a naming-only fallback as the correct minimal fix without redefining the report's meaning, which is what was implemented. Whether "Top Product" should eventually split into separate Product/Bundle rankings is a genuine design question, not something decided or implemented here.
 
 **Marketing attribution — confirmed out of scope, not touched:** `marketingHelpers.js`/`MarketingPage.jsx` is a separate page from Reports (Marketing Dashboard vs. the Reports page), not part of the display being changed in this step. The previously-documented campaign-attribution edge case (a bundle containing a campaign's target product isn't currently attributed to that campaign) remains deferred, unchanged.
+
+**✅ Step 7 complete — CSV Export VERIFIED, zero code changes required:**
+- Investigated all three CSV export call sites in the repo, not just `OrdersPage.jsx`: `exportOrdersToCSV` (Orders page) and `exportRowsToCSV` (also called from `RewardsPage.jsx` and `RoyaleRewardsPage.jsx`, discovered during this step's search — not previously enumerated)
+- `exportOrdersToCSV` has a fixed, hardcoded 11-column shape (ID, Date, Status, Customer Name/Phone, Delivery State, Source, Assigned Rep, Total Amount, Delivery Fee, Notes) — entirely order-level, zero reference to `order_items`/`product_id`/`bundle_id`/product or bundle names anywhere in the function
+- `exportRowsToCSV` is a fully generic utility — its behavior depends entirely on what each caller passes in. Both actual callers (`RewardsPage.jsx`, `RoyaleRewardsPage.jsx`) export commission-ledger rows (staff/agent name, customer, date, method, amounts, status, notes) — zero item-level identity in either
+- Confirmed the fixed-column shape makes the point moot even in principle: `exportOrdersToCSV` would never read `order_items` even if it happened to be present on the passed object, since its column list is hardcoded
+- **Verdict: no bundle-specific defect exists. No file changed.** Build re-run on the untouched repo as a sanity check: clean, 0 errors.
 
 **⚠️ Pre-existing issues found during the audit — explicitly NOT fixed, documented here per instruction:**
 - `awardOrderCommission()` (called from both `RequestsPage.jsx` and `AgentView.jsx`) is passed `order: { id, total_amount }` only — `order_items` is never included, so any `percent_profit` commission rule computes cost as ₦0 today, for every order, bundle or not.
